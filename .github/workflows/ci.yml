@@ -1,0 +1,28 @@
+name: CI - pull request
+
+on:
+  push:
+    branches: [ $default-branch ]
+  pull_request:
+    branches: [ $default-branch ]
+
+jobs:
+  verify-pr:
+    name: Verify that tests pass afer merging the PR
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v3
+    - name: Merge "${{ github.base_ref }}" into ${{ github.head_ref }}
+      run: |
+        base_branch="${{ github.base_ref }}"
+        head_branch="${{ github.head_ref }}"
+        git merge-base "origin/${base_branch}" "origin/${head_branch}"
+        if [[ $? -ne 0 ]]; then
+            echo "Merge failed"
+            exit 1
+        fi
+    - name: Run tests
+      run: |
+        cd regression-tests
+        bash run-tests.sh
