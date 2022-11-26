@@ -17,7 +17,7 @@
 
 [[nodiscard]] auto main() -> int{
     std::vector<std::string> vec { 
-               "hello", "2023" }; 
+               "hello", "2023" }; // Incorrect
     std::span view { vec }; 
 
     std::string y { "\n" }; 

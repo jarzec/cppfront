@@ -1,28 +1,40 @@
 name: CI - pull request
 
 on:
-  push:
-    branches: [ $default-branch ]
   pull_request:
-    branches: [ $default-branch ]
+    branches: [ "main" ]
 
 jobs:
   verify-pr:
-    name: Verify that tests pass afer merging the PR
+    name: Verify that tests pass afer merging the PR on Linux
     runs-on: ubuntu-latest
     steps:
     - name: Checkout repo
       uses: actions/checkout@v3
-    - name: Merge "${{ github.base_ref }}" into ${{ github.head_ref }}
+
+    - name: Merge "${{ github.head_ref }}" into "${{ github.base_ref }}"
       run: |
+        current_branch="$( git branch --show-current)"
         base_branch="${{ github.base_ref }}"
         head_branch="${{ github.head_ref }}"
-        git merge-base "origin/${base_branch}" "origin/${head_branch}"
+        git fetch origin
+        if [[ "$current_branch" != "$base_branch" ]]; then
+            git checkout --track "origin/$base_branch"
+        fi
+        git config user.email "jarek.glowacki@gmail.com"
+        git config user.name "jarzec"
+        git merge "origin/${head_branch}"
         if [[ $? -ne 0 ]]; then
             echo "Merge failed"
             exit 1
         fi
-    - name: Run tests
+
+    - name: Run tests using GCC 10
       run: |
         cd regression-tests
-        bash run-tests.sh
+        bash run-tests.sh g++-10
+
+    - name: Run tests using Clang 12
+      run: |
+        cd regression-tests
+        bash run-tests.sh clang++-12

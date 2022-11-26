@@ -1,15 +1,21 @@
 #!/bin/bash
 
 ################
-echo "Building cppfront using the compiler specified in the CXX_COMPILER env variable"
+if [[ $# -ne 1 ]]; then
+    echo "Usage:  bash $0 <c++ compile to use>"
+    exit 1;
+fi
+cxx_compiler=$1
+
+################
+echo "Building cppfront using the compiler: '$cxx_compiler'"
 if [ -f cppfront ]; then
     rm cppfront
 fi
-"$CXX_COMPILER" ../source/cppfront.cpp --std=c++20 -o cppfront
+"$cxx_compiler" ../source/cppfront.cpp --std=c++20 -o cppfront
 if [[ $? -ne 0 ]]; then
-    echo "Compilation failed"
-    echo "Is the CXX_COMPILER env variable set to the compiler to use?"
-    exit 1
+    echo "Compilation using '$cxx_compiler' failed"
+    exit 2
 fi
 
 ################
@@ -79,6 +85,8 @@ for test_file in $(ls | grep ".cpp2"); do
         failed_tests+=($test_name)
     fi
 done
+
+rm cppfront
 
 ################
 # Report failed tests
