@@ -824,7 +824,7 @@ auto lex_line(
                     if (tokens.back() == "delete") {
                         errors.emplace_back(
                             source_position(lineno, i),
-                            "'delete' and owning raw pointers are not supported in Cpp2"
+                            "'delete' and owning raw pointers are not supported in Cpp2  - breaking change - output"
                         );
                         errors.emplace_back(
                             source_position(lineno, i),

@@ -2255,7 +2255,7 @@ public:
         if (*n.kind == "post") {
             auto lambda_intro = build_capture_lambda_intro_for(n.captures, n.position());
             printer.print_cpp2(
-                "auto post_" + std::to_string(n.position().lineno) + "_" +
+                "auto post_" + std::to_string(n.position().lineno) + " >>> breaking change - code <<< " +
                     std::to_string(n.position().colno) + " = cpp2::finally_success(" +
                     lambda_intro + "{",
                 n.position()
