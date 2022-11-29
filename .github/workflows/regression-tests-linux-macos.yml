@@ -1,0 +1,28 @@
+name: Regression tests on Linux and macOS
+
+on:
+  push:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  regression-tests-linux-mac:
+    name: Run on ${{ matrix.os }} using ${{ matrix.compiler }}
+    runs-on: ${{ matrix.os }}
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        compiler: [g++-12, clang++-12, clang++-14]
+        include:
+          - os: macos-latest
+            compiler: clang++
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v3
+
+    - name: Run regression tests using ${{ matrix.compiler }}
+      run: |
+        cd regression-tests
+        bash run-tests.sh -c ${{ matrix.compiler }}
