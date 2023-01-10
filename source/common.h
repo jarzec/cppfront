@@ -34,6 +34,7 @@
 #include <compare>
 #include <algorithm>
 #include <unordered_map>
+#include <variant>
 
 namespace cpp2 {
 
@@ -268,6 +269,15 @@ auto replace_all(std::string& s, std::string_view what, std::string_view with)
         s.replace(pos, what.length(), with.data(), with.length());
     }
     return s;
+}
+
+template<typename... Ts, typename... Callables>
+constexpr auto inspect(std::variant<Ts...>&& variant, Callables&&... callables) {
+    // A combined collable composed of all the provided ones
+    struct overloaded : Callables... { using Callables::operator()...; };
+    
+    // Visit the variant using the provided callables
+    return std::visit(overloaded{std::forward<Callables>(callables)...}, std::forward<std::variant<Ts...>>(variant));
 }
 
 

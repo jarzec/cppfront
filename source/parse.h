@@ -1596,33 +1596,46 @@ private:
         if (auto decl = unnamed_declaration(curr().position(), false, true)) // captures are allowed
         {
             assert (!decl->identifier && "ICE: declaration should have been unnamed");
-            if (auto obj = std::get_if<declaration_node::object>(&decl->type)) {
-                if ((*obj)->is_wildcard()) {
-                    error("an unnamed object at expression scope currently cannot have a deduced type (the reason to create an unnamed object is typically to create a temporary of a named type)");
-                    next();
-                    return {};
-                }
-            }
-            else if (auto func = std::get_if<declaration_node::function>(&decl->type)) {
-                if ((*func)->returns.index() == function_type_node::list) {
-                    error("an unnamed function at expression scope currently cannot return multiple values");
-                    next();
-                    return {};
-                }
-                if (!(*func)->contracts.empty()) {
-                    error("an unnamed function at expression scope currently cannot have contracts");
-                    next();
-                    return {};
-                }
-            }
-            else {
-                error("(temporary alpha limitation) an unnamed declaration at expression scope must be a function or an object");
-                next();
-                return {};
-            }
 
-            n->expr = std::move(decl);
-            return n;
+            enum class ValidationResult {
+                Success,
+                Failure
+            };
+
+            // Here decl->type can be std::moved but it could also just be std::forwarded
+            auto validationResult = cpp2::inspect(std::move(decl->type),
+                [&](std::unique_ptr<type_id_node> && obj){
+                    if (obj->is_wildcard()) {
+                        error("an unnamed object at expression scope currently cannot have a deduced type (the reason to create an unnamed object is typically to create a temporary of a named type)");
+                        next();
+                        return ValidationResult::Failure;
+                    }
+                    return ValidationResult::Success;
+                },
+                [&](std::unique_ptr<function_type_node> && func){
+                    if (func->returns.index() == function_type_node::list) {
+                        error("an unnamed function at expression scope currently cannot return multiple values");
+                        next();
+                        return ValidationResult::Failure;
+                    }
+                    if (!func->contracts.empty()) {
+                        error("an unnamed function at expression scope currently cannot have contracts");
+                        next();
+                        return ValidationResult::Failure;
+                    }
+                    return ValidationResult::Success;
+                },
+                [&](auto &&) {
+                    error("(temporary alpha limitation) an unnamed declaration at expression scope must be a function or an object");
+                    next();
+                    return ValidationResult::Failure;
+                }
+            );
+
+            if(validationResult == ValidationResult::Success) {
+                n->expr = std::move(decl);
+                return n;
+            }
         }
 
         return {};
