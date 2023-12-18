@@ -14,10 +14,10 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        compiler: [g++-10]
+        compiler: [g++-10, clang++-15]
         include:
           - os: macos-latest
-            compiler: clang++
+            compiler: clang++-15
           - os: windows-latest
             compiler: cl.exe
     steps:
