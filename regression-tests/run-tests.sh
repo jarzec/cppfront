@@ -103,11 +103,11 @@ expected_results_dir="test-results"
 ################
 # Get the directory with the exec outputs and compilation command
 if [[ "$cxx_compiler" == *"cl.exe"* ]]; then
-    compiler_cmd='cl.exe -nologo -std:c++latest -MD -EHsc -I ..\include -I ..\..\..\include -experimental:module -Fe:'
+    compiler_cmd='cl.exe -nologo -std:c++latest -MD -EHsc -I ..\..\..\include std.obj std.compat.obj -Fe:'
     exec_out_dir="$expected_results_dir/msvc-2022"
     compiler_version=$(cl.exe)
 else
-    compiler_cmd="$cxx_compiler -I../include -I../../../include -std=c++20 -pthread -o "
+    compiler_cmd="$cxx_compiler -I../../../include -std=c++20 -pthread -o "
     
     compiler_ver=$("$cxx_compiler" --version)
     if [[ "$compiler_ver" == *"Apple clang version 14.0"* ]]; then
@@ -138,7 +138,9 @@ fi
 ################
 cppfront_cmd="cppfront.exe"
 echo "Building cppfront"
-$compiler_cmd"$cppfront_cmd" ../source/cppfront.cpp
+(cd $exec_out_dir; \
+ $compiler_cmd"$cppfront_cmd" \
+ ../../../source/cppfront.cpp )
 if [[ $? -ne 0 ]]; then
     echo "Compilation failed"
     exit 2
