@@ -145,6 +145,9 @@ struct primary_expression_node
     // Cache to work around <https://github.com/llvm/llvm-project/issues/73336>.
     bool expression_list_is_fold_expression = false;
 
+    // Out-of-line definition of the dtor is necessary due to the forward-declared
+    // type(s) used in a std::unique_ptr as a members
+    ~primary_expression_node();
 
     //  API
     //
@@ -238,6 +241,10 @@ struct prefix_expression_node
     std::vector<token const*> ops;
     std::unique_ptr<postfix_expression_node> expr;
 
+    // Out-of-line definition of the dtor is necessary due to the forward-declared
+    // type(s) used in a std::unique_ptr as a members
+    ~prefix_expression_node();
+
     //  API
     //
     auto is_fold_expression() const
@@ -296,6 +303,10 @@ struct binary_expression_node
     expression_node const* my_expression = {};
 
     binary_expression_node();
+
+    // Out-of-line definition of the dtor is necessary due to the forward-declared
+    // type(s) used as Term in a std::unique_ptr as a member
+    ~binary_expression_node();
 
     struct term
     {
@@ -1090,6 +1101,17 @@ struct template_argument
         std::unique_ptr<type_id_node>
     > arg;
 
+    template_argument() = default;
+    template_argument(template_argument const& other) { throw std::logic_error{"The type is uncopyable"}; }
+    template_argument(template_argument&& other) = default;
+    template_argument& operator=(template_argument const& other) { throw std::logic_error{"The type is uncopyable"}; }
+    template_argument& operator=(template_argument&& other) = default;
+
+    // Out-of-line definition of the dtor is necessary due to the forward-declared
+    // type(s) used in a std::unique_ptr as a members
+    ~template_argument();
+
+
     auto to_string() const
         -> std::string;
 };
@@ -1803,6 +1825,10 @@ struct iteration_statement_node
     std::unique_ptr<statement_node>             body;               // used for "for", else null
     bool                                        for_with_in = false;// used for "for," says whether loop variable is 'in'
 
+    // Out-of-line definition of the dtor is necessary due to the forward-declared
+    // type(s) used in a std::unique_ptr as a members
+    ~iteration_statement_node();
+
     auto position() const
         -> source_position
     {
@@ -1854,6 +1880,10 @@ struct alternative_node
     source_position                      equal_sign;
     std::unique_ptr<statement_node>      statement;
 
+    // Out-of-line definition of the dtor is necessary due to the forward-declared
+    // type(s) used in a std::unique_ptr as a members
+    ~alternative_node();
+
     auto position() const
         -> source_position
     {
@@ -1876,6 +1906,10 @@ struct inspect_expression_node
     source_position                          close_brace;
 
     std::vector<std::unique_ptr<alternative_node>> alternatives;
+
+    // Out-of-line definition of the dtor is necessary due to the forward-declared
+    // type(s) used in a std::unique_ptr as a members
+    ~inspect_expression_node();
 
     auto position() const
         -> source_position
@@ -2013,6 +2047,10 @@ struct statement_node
     compound_statement_node* compound_parent = nullptr;
 
     statement_node(compound_statement_node* compound_parent_ = nullptr);
+
+    // Out-of-line definition of the dtor is necessary due to the forward-declared
+    // type(s) used in a std::unique_ptr as a members
+    ~statement_node();
 
     enum active { expression=0, compound, selection, declaration, return_, iteration, using_, contract, inspect, jump };
     std::variant<
@@ -4389,6 +4427,26 @@ struct translation_unit_node
     }
 };
 
+// Definitions of out-of-line dtors for nodes with unique_ptr members of forward declared types
+primary_expression_node::~primary_expression_node() = default;
+
+prefix_expression_node::~prefix_expression_node() = default;
+
+template<
+    String   Name,
+    typename Term
+>
+binary_expression_node<Name, Term>::~binary_expression_node() = default;
+
+alternative_node::~alternative_node() = default;
+
+iteration_statement_node::~iteration_statement_node() = default;
+
+template_argument::~template_argument() = default;
+
+inspect_expression_node::~inspect_expression_node() = default;
+
+statement_node::~statement_node() = default;
 
 //-----------------------------------------------------------------------
 //
