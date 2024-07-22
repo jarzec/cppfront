@@ -298,7 +298,7 @@ for test_file in $tests; do
         ########
         # Compile and run the generated code in a sub-shell
         expected_src_compil_out="$exec_out_dir/$generated_cpp_name.output"
-        expected_src_exec_out="$exec_out_dir/$generated_cpp_name.execution"
+        expected_src_exec_out="$expected_results_dir/$generated_cpp_name.execution"
         expected_files="$expected_results_dir/$test_name.files"
 
         echo "        Compiling the generated Cpp1 code"
@@ -334,7 +334,7 @@ for test_file in $tests; do
                 # Execute the compiled code in $exec_out_dir
                 echo "        Executing the compiled test binary"
                 # Run the binary in a sub-shell in $exec_out_dir so that files are written there
-                ( cd "$exec_out_dir"; ./$test_bin > "$generated_cpp_name.execution" 2>&1 )
+                ( cd "$exec_out_dir"; ./$test_bin > ../"$generated_cpp_name.execution" 2>&1 )
 
                 check_file "$expected_src_exec_out" "execution output file"
                 # If the test generates files check their content
