@@ -20,8 +20,6 @@
 
 #include "common.h"
 #include <fstream>
-#include <ostream>
-#include <iterator>
 #include <cctype>
 
 
@@ -177,7 +175,7 @@ auto starts_with_whitespace_slash_star_and_no_star_slash(std::string const& line
         && line[i + 1] == '*'
         )
     {
-        return line.find("*/", i) == std::string::npos;
+        return line.find("*/", i) == line.npos;
     }
     else {
         return false;
@@ -463,20 +461,30 @@ public:
     //  --- Preprocessor matching functions - #if/#else/#endif
 
     //  Entering an #if
-    auto found_pre_if() -> void {
-        assert(std::ssize(preprocessor) > 0);
+    auto found_pre_if(lineno_t) -> void {
         preprocessor.push_back({});
     }
 
     //  Encountered an #else
-    auto found_pre_else() -> void {
-        assert(std::ssize(preprocessor) > 1);
+    auto found_pre_else(lineno_t lineno) -> void {
+        if (std::ssize(preprocessor) < 2) {
+            errors.emplace_back(
+                lineno,
+                "#else does not match a prior #if"
+            );
+        }
+
         preprocessor.back().found_preprocessor_else();
     }
 
     //  Exiting an #endif
-    auto found_pre_endif() -> void {
-        assert(std::ssize(preprocessor) > 1);
+    auto found_pre_endif(lineno_t lineno) -> void {
+        if (std::ssize(preprocessor) < 2) {
+            errors.emplace_back(
+                lineno,
+                "#endif does not match a prior #if"
+            );
+        }
 
         //  If the #if/#else/#endif introduced the same net number of braces,
         //  then we will have recorded that number too many open braces, and
@@ -606,7 +614,7 @@ auto process_cpp_line(
         }
         else if (in_raw_string_literal) {
             auto end_pos = line.find(raw_string_closing_seq, i);
-            if (end_pos == std::string::npos) {
+            if (end_pos == line.npos) {
                 return r;
             }
             in_raw_string_literal = false;
@@ -628,7 +636,7 @@ auto process_cpp_line(
                         if (i < ssize(line) - 1)
                         {
                             if (auto paren_pos = line.find("(", i);
-                                paren_pos != std::string::npos
+                                paren_pos != line.npos
                                 )
                             {
                                 raw_string_closing_seq = ")"+line.substr(i, paren_pos-i)+"\"";
@@ -743,6 +751,15 @@ auto process_cpp2_line(
             break;default: ;
             }
         }
+        else if (
+            auto j = is_encoding_prefix_and(line, i, '\'');
+            j > 1
+            )
+        {
+            in_char_literal = true;
+            i += j-1;
+            prev = line[i-1];
+        }
         else
         {
             switch (line[i])
@@ -772,6 +789,7 @@ auto process_cpp2_line(
                                 " after the closing ; or } of a definition, the rest"
                                 " of the line cannot begin a /*...*/ comment")
                         );
+                        return false;
                     }
                 }
 
@@ -800,6 +818,7 @@ auto process_cpp2_line(
             source_position(lineno, unsafe_narrow<colno_t>(ssize(line))),
             std::string("line ended before character literal was terminated")
         );
+        return false;
     }
 
     return found_end;
@@ -889,11 +908,11 @@ public:
             {
                 switch (pre) {
                 break;case preprocessor_conditional::pre_if:
-                    braces.found_pre_if();
+                    braces.found_pre_if( cpp2::unsafe_narrow<lineno_t>(std::ssize(lines)) );
                 break;case preprocessor_conditional::pre_else:
-                    braces.found_pre_else();
+                    braces.found_pre_else( cpp2::unsafe_narrow<lineno_t>(std::ssize(lines)) );
                 break;case preprocessor_conditional::pre_endif:
-                    braces.found_pre_endif();
+                    braces.found_pre_endif( cpp2::unsafe_narrow<lineno_t>(std::ssize(lines)) );
                 break;default:
                     assert(false);
                 }

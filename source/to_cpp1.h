@@ -19,24 +19,9 @@
 #define CPP2_TO_CPP1_H
 
 #include "sema.h"
-#include <iostream>
-#include <cstdio>
-#include <optional>
 #include <filesystem>
 
 namespace cpp2 {
-
-//  Defined out of line here just to avoid bringing <iostream> in before this,
-//  so that we can't accidentally start depending on iostreams in earlier phases
-auto cmdline_processor::print(std::string_view s, int width)
-    -> void
-{
-    if (width > 0) {
-        std::cout << std::setw(width) << std::left;
-    }
-    std::cout << s;
-}
-
 
 //-----------------------------------------------------------------------
 //
@@ -92,15 +77,15 @@ auto multi_return_type_name(declaration_node const& n)
 //
 static auto flag_emit_cppfront_info = false;
 static cmdline_processor::register_flag cmd_emit_cppfront_info(
-    9,
+    8,
     "emit-cppfront-info",
-    "Emit cppfront version/build in output file",
+    "Emit cppfront version/build in Cpp1 file",
     []{ flag_emit_cppfront_info = true; }
 );
 
 static auto flag_clean_cpp1 = false;
 static cmdline_processor::register_flag cmd_clean_cpp1(
-    9,
+    8,
     "clean-cpp1",
     "Emit clean Cpp1 without #line directives",
     []{ flag_clean_cpp1 = true; }
@@ -108,7 +93,7 @@ static cmdline_processor::register_flag cmd_clean_cpp1(
 
 static auto flag_line_paths = false;
 static cmdline_processor::register_flag cmd_line_paths(
-    9,
+    8,
     "line-paths",
     "Emit absolute paths in #line directives",
     [] { flag_line_paths = true; }
@@ -146,6 +131,14 @@ static cmdline_processor::register_flag cmd_safe_null_pointers(
     []{ flag_safe_null_pointers = false; }
 );
 
+static auto flag_safe_zero_division = true;
+static cmdline_processor::register_flag cmd_safe_zero_division(
+    2,
+    "no-div-zero-checks",
+    "Disable integer division by zero checks",
+    []{ flag_safe_zero_division = false; }
+);
+
 static auto flag_safe_subscripts = true;
 static cmdline_processor::register_flag cmd_safe_subscripts(
     2,
@@ -162,14 +155,6 @@ static cmdline_processor::register_flag cmd_safe_comparisons(
     []{ flag_safe_comparisons = false; }
 );
 
-static auto flag_use_source_location = false;
-static cmdline_processor::register_flag cmd_enable_source_info(
-    2,
-    "add-source-info",
-    "Enable source_location information for contract checks",
-    []{ flag_use_source_location = true; }
-);
-
 static auto flag_cpp1_filename = std::string{};
 static cmdline_processor::register_flag cmd_cpp1_filename(
     9,
@@ -179,20 +164,13 @@ static cmdline_processor::register_flag cmd_cpp1_filename(
     [](std::string const& name) { flag_cpp1_filename = name; }
 );
 
-static auto flag_print_colon_errors = false;
-static cmdline_processor::register_flag cmd_print_colon_errors(
+static auto flag_cwd = std::filesystem::path{};
+static cpp2::cmdline_processor::register_flag cmd_cwd(
     9,
-    "format-colon-errors",
-    "Emit ':line:col:' format for messages - lights up some tools",
-    []{ flag_print_colon_errors = true; }
-);
-
-static auto flag_verbose = false;
-static cmdline_processor::register_flag cmd_verbose(
-    9,
-    "verbose",
-    "Print verbose statistics and -debug output",
-    []{ flag_verbose = true; }
+    "cwd path",
+    "Change current working directory to path",
+    nullptr,
+    [](std::string const& path) { flag_cwd = { path }; }
 );
 
 static auto flag_no_exceptions = false;
@@ -217,38 +195,14 @@ struct text_with_pos{
     text_with_pos(std::string const& t, source_position p) : text{t}, pos{p} { }
 };
 
-// Defined out of line so we can use flag_print_colon_errors.
-auto error_entry::print(
-    auto&              o,
-    std::string const& file
-) const
-    -> void
-{
-    o << file ;
-    if (where.lineno > 0) {
-        if (flag_print_colon_errors) {
-            o << ":" << (where.lineno);
-            if (where.colno >= 0) {
-                o << ":" << where.colno;
-            }
-        }
-        else {
-            o << "("<< (where.lineno);
-            if (where.colno >= 0) {
-                o << "," << where.colno;
-            }
-            o  << ")";
-        }
-    }
-    o << ":";
-    if (internal) {
-        o << " internal compiler";
-    }
-    o << " error: " << msg << "\n";
-}
-
 class positional_printer
 {
+public:
+    positional_printer()                          = default;
+private:
+    positional_printer(positional_printer const&) = delete;
+    void operator=(positional_printer const&)     = delete;
+
     //  Core information
     std::ofstream               out_file        = {}; // Cpp1 syntax output file
     std::ostream*               out             = {}; // will point to out_file or cout
@@ -303,7 +257,7 @@ private:
         switch (phase) {
         break;case phase0_type_decls          : phase = phase1_type_defs_func_decls;
         break;case phase1_type_defs_func_decls: phase = phase2_func_defs;
-        break;default                         : assert(!"ICE: invalid lowering phase");
+        break;default                         : assert(false && "ICE: invalid lowering phase");
         }
         curr_pos     = {};
         next_comment = 0;   // start over with the comments
@@ -397,9 +351,9 @@ private:
         //  and where the last one was which determines our current colno
         if (track_curr_pos)
         {
-            auto last_newline = std::string::npos;  // the last newline we found in the string
+            auto last_newline = s.npos;             // the last newline we found in the string
             auto newline_pos  = std::size_t(0);     // the current newline we found in the string
-            while ((newline_pos = s.find('\n', newline_pos)) != std::string::npos)
+            while ((newline_pos = s.find('\n', newline_pos)) != s.npos)
             {
                 //  For each line break we find, reset pad and inc current lineno
                 pad_for_this_line = 0;
@@ -409,7 +363,7 @@ private:
             }
 
             //  Now also adjust the colno
-            if (last_newline != std::string::npos) {
+            if (last_newline != s.npos) {
                 //  If we found a newline, it's the distance from the last newline to EOL
                 curr_pos.colno = unsafe_narrow<colno_t>(s.length() - last_newline);
             }
@@ -469,7 +423,7 @@ private:
         if (c.kind == comment::comment_kind::line_comment) {
             print( pad( c.start.colno - curr_pos.colno + 1 ) );
             print( c.text );
-            assert( c.text.find("\n") == std::string::npos );  // we shouldn't have newlines
+            assert( c.text.find("\n") == c.text.npos ); // we shouldn't have newlines
             print("\n");
         }
 
@@ -846,7 +800,7 @@ public:
             && newline_pos != s.npos
             )
         {
-            while (newline_pos != std::string_view::npos)
+            while (newline_pos != s.npos)
             {
                 //  Print the text before the next newline
                 if (newline_pos > 0) {
@@ -1134,7 +1088,7 @@ class cppfront
     };
     class current_functions_
     {
-        std::deque<function_info> list = { {} };
+        stable_vector<function_info> list = { {} };
     public:
         auto push(
             declaration_node const*                    decl,
@@ -1192,6 +1146,7 @@ class cppfront
     std::vector<iter_info> iteration_statements;
 
     std::vector<bool>                             in_non_rvalue_context   = { false };
+    std::vector<bool>                             in_single_unqualified_id_return  = { false };
     std::vector<bool>                             need_expression_list_parens = { true };
     auto push_need_expression_list_parens( bool b ) -> void { need_expression_list_parens.push_back(b);            }
     auto pop_need_expression_list_parens()          -> void { assert(std::ssize(need_expression_list_parens) > 1);
@@ -1299,8 +1254,14 @@ public:
 
         //  Now we'll open the Cpp1 file
         auto cpp1_filename = sourcefile.substr(0, std::ssize(sourcefile) - 1);
+        
+        //  Use explicit filename override if present,
+        //  otherwise strip leading path
         if (!flag_cpp1_filename.empty()) {
-            cpp1_filename = flag_cpp1_filename; // use override if present
+            cpp1_filename = flag_cpp1_filename;
+        }
+        else {
+            cpp1_filename = std::filesystem::path(cpp1_filename).filename().string();
         }
 
         printer.open(
@@ -1346,10 +1307,6 @@ public:
             if (cpp1_filename.back() == 'h') {
                 printer.print_extra( "#ifndef " + cpp1_FILENAME+"_CPP2\n");
                 printer.print_extra( "#define " + cpp1_FILENAME+"_CPP2" + "\n\n" );
-            }
-
-            if (flag_use_source_location) {
-                printer.print_extra( "#define CPP2_USE_SOURCE_LOCATION Yes\n" );
             }
 
             if (flag_include_std) {
@@ -1678,13 +1635,17 @@ public:
             pos = n.position();
         }
 
-        //  Implicit "cpp2::" qualification of Cpp2 fixed-width type aliases
-        //  and cpp2::finally
+        //  Implicit "cpp2::" qualification of utilities we want to
+        //  make usable without cpp2:: qualification
         if (
             !is_qualified
             && (
                 n.type() == lexeme::Cpp2FixedType
                 || n == "finally"
+                || n == "cpp1_ref"
+                || n == "cpp1_rvalue_ref"
+                || n == "unsafe_narrow"
+                || n == "unsafe_cast"
                 )
             )
         {
@@ -1713,9 +1674,13 @@ public:
             || n == "struct"
             || n == "enum"
             || n == "union"
+            || n == "default"
             )
         {
             printer.print_cpp2("cpp2_"+n.to_string(), pos);
+        }
+        else if (n == "type_of") {
+            printer.print_cpp2("CPP2_TYPEOF", pos);
         }
         else {
             printer.print_cpp2(n, pos, true);
@@ -1737,10 +1702,9 @@ public:
             pos = n.position();
         }
 
-        assert(n.literal);
-        emit(*n.literal);
-        if (n.user_defined_suffix) {
-            emit(*n.user_defined_suffix);
+        for (auto p : n.pieces) {
+            assert(p);
+            emit(*p);
         }
     }
 
@@ -1749,32 +1713,66 @@ public:
     //
     auto emit(
         unqualified_id_node const& n,
-        bool in_synthesized_multi_return = false,
-        bool is_local_name = true,
-        bool is_qualified = false
+        int                        synthesized_multi_return_size = 0,
+        bool                       is_local_name                 = true,
+        bool                       is_qualified                  = false,
+        bool                       is_class_member_access        = false
     )
         -> void
     {   STACKINSTR
         assert( n.identifier );
         auto last_use = is_definite_last_use(n.identifier);
 
+        auto decl = sema.get_declaration_of(*n.identifier, false, true);
+
         bool add_forward =
             last_use
             && last_use->is_forward
-            && !in_non_rvalue_context.back();
+            && last_use->safe_to_move
+            && !in_non_rvalue_context.back()
+            && !is_class_member_access;
 
+        //  We always want to std::move from named return values,
+        //  regardless of their types, so use std::move for that
+        bool add_std_move =
+            synthesized_multi_return_size > 1
+            || (
+                synthesized_multi_return_size == 1
+                && decl
+                && !decl->initializer
+                );
+
+        //  Otherwise we'll use cpp2::move
         bool add_move =
             !add_forward
             && (
-                in_synthesized_multi_return
+                !last_use
+                || last_use->safe_to_move
+                )
+            && (
+                add_std_move
                 || (last_use && !suppress_move_from_last_use)
                 )
-            && !in_non_rvalue_context.back();
+            && !in_non_rvalue_context.back()
+            && !is_class_member_access;
+
+        //  Add `cpp2::move(*this).` when implicitly moving a member on last use
+        //  This way, members of lvalue reference type won't be implicitly moved
+        bool add_this =
+            add_move
+            && decl
+            && decl->identifier
+            && *decl->identifier == "this"
+            && *n.identifier != "this";
 
         if (
             add_move
-            && *(n.identifier - 1) == "return"
-            && *(n.identifier + 1) == ";"
+            && in_single_unqualified_id_return.size() > 0
+            && in_single_unqualified_id_return.back()
+            && (
+                !decl
+                || decl->initializer
+                )
             )
         {
             add_move = false;
@@ -1794,11 +1792,19 @@ public:
             add_forward = current_args.back().ptoken == n.identifier;
         }
 
-        if (add_move) {
+        if (add_std_move) {
             printer.print_cpp2("std::move(", n.position());
         }
+        else if (add_move) {
+            printer.print_cpp2("cpp2::move(", n.position());
+        }
+
         if (add_forward) {
             printer.print_cpp2("CPP2_FORWARD(", {n.position().lineno, n.position().colno - 8});
+        }
+
+        if (add_this) {
+            printer.print_cpp2("*this).", n.position());
         }
 
         assert(n.identifier);
@@ -1824,13 +1830,13 @@ public:
             && !in_parameter_list
             )
         {
-            if (auto decl = sema.get_declaration_of(*n.identifier);
+            if (
                 is_local_name
                 && !(*n.identifier == "this")
                 && !(*n.identifier == "that")
                 && decl
                 && (
-                    in_synthesized_multi_return
+                    synthesized_multi_return_size != 0
                     //  note pointer equality: if we're not in the actual declaration of n.identifier
                     || decl->identifier != n.identifier
                     )
@@ -1849,13 +1855,17 @@ public:
                 printer.print_cpp2(".value()", n.position());
             }
         }
-        else if (in_synthesized_multi_return) {
+        else if (synthesized_multi_return_size != 0) {
             printer.print_cpp2(".value()", n.position());
         }
 
         if (
-            add_move
-            || add_forward
+            !add_this
+            && (
+                add_move
+                || add_std_move
+                || add_forward
+                )
             )
         {
             printer.print_cpp2(")", n.position());
@@ -1883,7 +1893,7 @@ public:
             if (id.scope_op) {
                 emit(*id.scope_op);
             }
-            emit(*id.id, false, true, true);    // inform the unqualified-id that it's qualified
+            emit(*id.id, 0, true, true);    // inform the unqualified-id that it's qualified
         }
 
         printer.emit_to_string();
@@ -1895,7 +1905,8 @@ public:
     //
     auto emit(
         type_id_node const& n,
-        source_position     pos = {}
+        source_position     pos        = {},
+        std::string         identifier = {}
     )
         -> void
     {   STACKINSTR
@@ -1903,11 +1914,27 @@ public:
             pos = n.position();
         }
 
+        //  Handle function types
+        if (n.is_function_typeid()) {
+            //  If identifier is nonempty, we're doing a local variable with a (pointer to)
+            //  function typeid, so stick in the pointers here for inside-out Cpp1 declarations
+            if (!identifier.empty()) {
+                for (auto q: n.pc_qualifiers) {
+                    if (*q == "const") { identifier = " " + identifier; }
+                    identifier = q->as_string_view() + identifier;
+                }
+                identifier = "(" + identifier + ")";
+            }
+            emit( *std::get<type_id_node::function>(n.id), false, false, {}, false, identifier );
+            return;
+        }
+
+        //  Handle all other types
         if (n.is_wildcard()) {
             printer.print_cpp2("auto", pos);
         }
         else {
-            try_emit<type_id_node::unqualified>(n.id, false, false);
+            try_emit<type_id_node::unqualified>(n.id, 0, false);
             try_emit<type_id_node::qualified  >(n.id);
             try_emit<type_id_node::keyword    >(n.id);
         }
@@ -1923,12 +1950,13 @@ public:
     //
     auto emit(
         id_expression_node const& n,
-        bool                      is_local_name          = true
+        bool                      is_local_name          = true,
+        bool                      is_class_member_access = false
     )
         -> void
     {   STACKINSTR
         try_emit<id_expression_node::qualified  >(n.id);
-        try_emit<id_expression_node::unqualified>(n.id, false, is_local_name);
+        try_emit<id_expression_node::unqualified>(n.id, 0, is_local_name, false, is_class_member_access);
     }
 
 
@@ -1974,7 +2002,7 @@ public:
     //-----------------------------------------------------------------------
     //
     auto emit(
-        compound_statement_node  const&  n,
+        compound_statement_node  const& n,
         function_prolog          const& function_prolog = {},
         std::vector<std::string> const& function_epilog = {}
     )
@@ -2079,7 +2107,7 @@ public:
                     statement.pop_back();
                 }
 
-                replace_all( statement, "cpp2::as_<", "cpp2::as<" );
+                replace_all( statement, "cpp2::impl::as_<", "cpp2::impl::as<" );
 
                 //  If this is an inspect-expression, we'll have to wrap each alternative
                 //  in an 'if constexpr' so that its type is ignored for mismatches with
@@ -2100,11 +2128,11 @@ public:
                 else {
                     printer.print_cpp2("if " + constexpr_qualifier, alt->position());
                     if (alt->type_id) {
-                        printer.print_cpp2("(cpp2::is<" + id + ">(_expr)) ", alt->position());
+                        printer.print_cpp2("(cpp2::impl::is<" + id + ">(_expr)) ", alt->position());
                     }
                     else {
                         assert (alt->value);
-                        printer.print_cpp2("(cpp2::is(_expr, " + id + ")) ", alt->position());
+                        printer.print_cpp2("(cpp2::impl::is(_expr, " + id + ")) ", alt->position());
                     }
                     printer.print_cpp2(return_prefix, alt->position());
                 }
@@ -2189,8 +2217,6 @@ public:
         -> void
     {   STACKINSTR
         assert(n.identifier);
-        in_non_rvalue_context.push_back(true);
-        auto guard = finally([&]{ in_non_rvalue_context.pop_back(); });
 
         iteration_statements.push_back({ &n, false});
         auto labelname = std::string{};
@@ -2323,7 +2349,7 @@ public:
         }
 
         else {
-            assert(!"ICE: unexpected case");
+            assert(false && "ICE: unexpected case");
         }
 
         assert (iteration_statements.back().stmt);
@@ -2357,6 +2383,12 @@ public:
         assert(*n.identifier == "return");
         printer.print_cpp2("return ", n.position());
 
+        in_single_unqualified_id_return.push_back(
+            n.expression
+            && n.expression->is_unqualified_id()
+        );
+        auto guard = finally([&]{ in_single_unqualified_id_return.pop_back(); });
+
         //  Return with expression == single anonymous return type
         //
         if (n.expression)
@@ -2381,19 +2413,21 @@ public:
                     is_parameter_name
                     && (
                         current_functions.back().decl->has_in_parameter_named(*tok)
+                        || current_functions.back().decl->has_copy_parameter_named(*tok)
                         || current_functions.back().decl->has_move_parameter_named(*tok)
                         )
                     )
                 {
                     errors.emplace_back(
                         n.position(),
-                        "a 'forward' return type cannot return an 'in' or 'move' parameter"
+                        "a 'forward' return type cannot return an 'in', 'copy', or 'move' parameter"
                     );
                     return;
                 }
                 else if (
                     !is_parameter_name
                     && sema.get_declaration_of(*tok)
+                    && !sema.is_captured(*tok)
                     )
                 {
                     errors.emplace_back(
@@ -2407,7 +2441,7 @@ public:
                 {
                     errors.emplace_back(
                         n.position(),
-                        "a 'forward' return type cannot return a temporary variable"
+                        "a 'forward' return type must return an 'inout', 'out', or 'forward' parameter; it cannot return a complex expression -- for example: for a function that takes a stream object 'output`, instead of 'return output << data;' write 'output << data; return output;'"
                     );
                     return;
                 }
@@ -2487,7 +2521,7 @@ public:
                 assert(param->declaration->identifier);
 
                 printer.emit_to_string(&stmt);
-                emit(*param->declaration->identifier, true);
+                emit(*param->declaration->identifier, cpp2::unsafe_narrow<int>(parameters.size()));
                 printer.emit_to_string();
             }
 
@@ -2858,8 +2892,8 @@ public:
     }
 
 
-    auto source_order_name_lookup(unqualified_id_node const& id)
-    -> source_order_name_lookup_res
+    auto source_order_name_lookup(std::string_view identifier)
+        -> source_order_name_lookup_res
     {
         for (
             auto first = current_names.rbegin(), last = current_names.rend() - 1;
@@ -2871,7 +2905,7 @@ public:
                 auto decl = get_if<declaration_node const*>(&*first);
                 decl
                 && *decl
-                && (*decl)->has_name(*id.identifier)
+                && (*decl)->has_name(identifier)
                 )
             {
                 return *decl;
@@ -2880,7 +2914,7 @@ public:
                 auto using_ = get_if<active_using_declaration>(&*first);
                 using_
                 && using_->identifier
-                && *using_->identifier == *id.identifier
+                && *using_->identifier == identifier
                 )
             {
                 return *using_;
@@ -2890,6 +2924,38 @@ public:
         return {};
     }
 
+    auto lookup_finds_type_scope_function(id_expression_node const& n)
+        -> bool
+    {
+        if (!n.is_unqualified())
+        {
+            return false;
+        }
+
+        auto const& id = *get<id_expression_node::unqualified>(n.id);
+        auto lookup = source_order_name_lookup(*id.identifier);
+
+        if (
+            !lookup
+            || get_if<active_using_declaration>(&*lookup)
+            )
+        {
+            return false;
+        }
+
+        auto decl = get<declaration_node const*>(*lookup);
+
+        if (
+            !decl->is_function()
+            || !decl->has_name()
+            || !decl->parent_is_type()
+            )
+        {
+            return false;
+        }
+
+        return true;
+    }
 
     auto lookup_finds_variable_with_placeholder_type_under_initialization(id_expression_node const& n)
         -> bool
@@ -2900,7 +2966,7 @@ public:
         }
 
         auto const& id = *get<id_expression_node::unqualified>(n.id);
-        auto lookup = source_order_name_lookup(id);
+        auto lookup = source_order_name_lookup(*id.identifier);
 
         if (
             !lookup
@@ -3220,7 +3286,7 @@ public:
                             "("
                             + print_to_string(id, false)
                             + "::),"
-                            + print_to_string(*cpp2::assert_not_null(id.ids.back().id), false, true, true);
+                            + print_to_string(*cpp2::impl::assert_not_null(id.ids.back().id), 0, true, true);
                     }
                     ufcs_string += "_TEMPLATE";
                 }
@@ -3255,9 +3321,41 @@ public:
                     ufcs_string += "_NONLOCAL";
                 }
 
+                //  If it's a last use, emit as part of the macro name
+                //
+                //  Note: This ensures a valid member call is still prioritized
+                //  by leveraging the last use only in the non-member branch
+                //  For example, `x.f()` won't emit as 'CPP2_UFCS(cpp2::move(f))(x)'
+                //  to never take the branch that wants to call `x.cpp2::move(f)()`
+                if (auto last_use = is_definite_last_use(i->id_expr->get_token());
+                    last_use
+                    && last_use->safe_to_move
+                    && !lookup_finds_type_scope_function(*i->id_expr)
+                    )
+                {
+                    if (last_use->is_forward) {
+                        ufcs_string += "_FORWARD";
+                    }
+                    else {
+                        ufcs_string += "_MOVE";
+                    }
+
+                    in_non_rvalue_context.push_back(true);
+                    funcname = print_to_string(*i->id_expr);
+                    in_non_rvalue_context.pop_back();
+                }
+
                 //  Second, emit the UFCS argument list
 
-                prefix.emplace_back(ufcs_string + "(" + funcname + ")(", args.value().open_pos );
+                //  If the computed function name is an explicit member access
+                //  we don't need to go through the UFCS macro
+                //  Note: This also works around compiler bugs
+                if (funcname.starts_with("cpp2::move(*this).")) {
+                    prefix.emplace_back(funcname + "(", args.value().open_pos );
+                }
+                else {
+                    prefix.emplace_back(ufcs_string + "(" + funcname + ")(", args.value().open_pos );
+                }
                 suffix.emplace_back(")", args.value().close_pos );
                 if (!args.value().text_chunks.empty()) {
                     for (auto&& e: args.value().text_chunks) {
@@ -3294,7 +3392,7 @@ public:
                     && i->op->type() == lexeme::Multiply
                     )
                 {
-                    prefix.emplace_back( "cpp2::assert_not_null(", i->op->position() );
+                    prefix.emplace_back( "cpp2::impl::assert_not_null(", i->op->position() );
                 }
                 if (
                     flag_safe_null_pointers
@@ -3315,8 +3413,13 @@ public:
                 last_was_prefixed = true;
             }
 
-            //  Handle the other Cpp2 postfix operators that stay postfix in Cpp1 (currently: '...')
-            else if (is_postfix_operator(i->op->type())) {
+            //  Handle the other Cpp2 postfix operators that stay postfix in Cpp1 
+            //  (currently '...' for expansion, not when used as a range operator)
+            else if (
+                is_postfix_operator(i->op->type())
+                && !i->last_expr    // not being used as a range operator
+                ) 
+            {
                 flush_args();
                 suffix.emplace_back( i->op->to_string(), i->op->position());
             }
@@ -3355,7 +3458,11 @@ public:
                         args.reset();
                     }
 
-                    auto print = print_to_string(*i->id_expr, false /*not a local name*/);
+                    auto print = print_to_string(
+                        *i->id_expr, 
+                        false, // not a local name
+                        i->op->type() == lexeme::Dot || i->op->type() == lexeme::DotDot // member access
+                    );
                     suffix.emplace_back( print, i->id_expr->position() );
                 }
 
@@ -3364,6 +3471,19 @@ public:
                     for (auto&& e: text) {
                         suffix.push_back(e);
                     }
+                }
+
+                if (i->last_expr)
+                {
+                    prefix.emplace_back( "cpp2::range(", i->op->position() );
+                    auto print = print_to_string( *i->last_expr );
+                    if (i->op->type() == lexeme::EllipsisEqual) {
+                        print += ",true";
+                    }
+                    else {
+                        assert(i->op->type() == lexeme::EllipsisLess);
+                    }
+                    suffix.emplace_back( "," + print + ")", i->last_expr->position());
                 }
 
                 //  Enable subscript bounds checks
@@ -3375,7 +3495,7 @@ public:
                 {
                     if (auto lit = i->expr_list->expressions.front().expr->get_literal();
                         lit
-                        && lit->literal->type() == lexeme::DecimalLiteral
+                        && lit->get_token()->type() == lexeme::DecimalLiteral
                         )
                     {
                         prefix.emplace_back( "CPP2_ASSERT_IN_BOUNDS_LITERAL(", i->op->position() );
@@ -3386,7 +3506,13 @@ public:
                     }
                     suffix.emplace_back( ", ", i->op->position() );
                 }
-                else {
+                //  If this is a .., emit . instead
+                else if( i->op->type() == lexeme::DotDot) {
+                    suffix.emplace_back(".", i->op->position());
+                }
+                //  If this is a range expression, suppress emitting the .../..= operator
+                //  Otherwise emit the postfix operator here
+                else if (!i->last_expr) {
                     suffix.emplace_back( i->op->to_string(), i->op->position() );
                 }
             }
@@ -3397,7 +3523,7 @@ public:
             printer.print_cpp2(e.text, n.position());
         }
 
-        //  If this is an --, ++, or &, don't add std::move on the lhs
+        //  If this is an --, ++, or &, don't add cpp2::move on the lhs
         //  even if this is a definite last use (only do that when an rvalue is okay)
         if (
             n.ops.front().op->type() == lexeme::MinusMinus
@@ -3475,7 +3601,7 @@ public:
                 && is_literal(t->type())
                 && t->type() != lexeme::StringLiteral
                 && t->type() != lexeme::FloatLiteral
-                && !std::get<primary_expression_node::literal>(p->expr)->user_defined_suffix
+                && !std::get<primary_expression_node::literal>(p->expr)->has_user_defined_suffix()
                 && std::ssize(n.ops) > 0
                 && *n.ops[0].op == "as"
                 )
@@ -3490,7 +3616,7 @@ public:
             ++i
             )
         {
-            //  If it's "ISORAS type", emit "cpp2::ISORAS<type>(expr)"
+            //  If it's "ISORAS type", emit "cpp2::impl::ISORAS<type>(expr)"
             if (i->type)
             {
                 if (i->type->is_wildcard()) {
@@ -3513,15 +3639,15 @@ public:
                     if (op_name == "as") {
                         op_name = "as_";    // use the static_assert-checked 'as' by default...
                     }                       // we'll override this inside inspect-expressions
-                    prefix += "cpp2::" + op_name + "<" + print_to_string(*i->type) + ">(";
+                    prefix += "cpp2::impl::" + op_name + "<" + print_to_string(*i->type) + ">(";
                     suffix = ")" + suffix;
                 }
             }
-            //  Else it's "is value", emit "cpp2::is(expr, value)"
+            //  Else it's "is value", emit "cpp2::impl::is(expr, value)"
             else
             {
                 assert(i->expr);
-                prefix += "cpp2::" + i->op->to_string() + "(";
+                prefix += "cpp2::impl::" + i->op->to_string() + "(";
                 suffix = ", " + print_to_string(*i->expr) + ")" + suffix;
             }
         }
@@ -3581,13 +3707,13 @@ public:
                 if (flag_safe_comparisons) {
                     switch (op.type()) {
                     break;case lexeme::Less:
-                        printer.print_cpp2( "cpp2::cmp_less(", n.position());
+                        printer.print_cpp2( "cpp2::impl::cmp_less(", n.position());
                     break;case lexeme::LessEq:
-                        printer.print_cpp2( "cpp2::cmp_less_eq(", n.position());
+                        printer.print_cpp2( "cpp2::impl::cmp_less_eq(", n.position());
                     break;case lexeme::Greater:
-                        printer.print_cpp2( "cpp2::cmp_greater(", n.position());
+                        printer.print_cpp2( "cpp2::impl::cmp_greater(", n.position());
                     break;case lexeme::GreaterEq:
-                        printer.print_cpp2( "cpp2::cmp_greater_eq(", n.position());
+                        printer.print_cpp2( "cpp2::impl::cmp_greater_eq(", n.position());
                     break;default:
                         ;
                     }
@@ -3677,13 +3803,13 @@ public:
                     if (flag_safe_comparisons) {
                         switch (term.op->type()) {
                         break;case lexeme::Less:
-                            lambda_body += "cpp2::cmp_less(";
+                            lambda_body += "cpp2::impl::cmp_less(";
                         break;case lexeme::LessEq:
-                            lambda_body += "cpp2::cmp_less_eq(";
+                            lambda_body += "cpp2::impl::cmp_less_eq(";
                         break;case lexeme::Greater:
-                            lambda_body += "cpp2::cmp_greater(";
+                            lambda_body += "cpp2::impl::cmp_greater(";
                         break;case lexeme::GreaterEq:
-                            lambda_body += "cpp2::cmp_greater_eq(";
+                            lambda_body += "cpp2::impl::cmp_greater_eq(";
                         break;default:
                             ;
                         }
@@ -3747,7 +3873,7 @@ public:
             }
         }
 
-        //  Else if this is an assignment expression, don't add std::move on the lhs
+        //  Else if this is an assignment expression, don't add cpp2::move on the lhs
         //  even if this is a definite last use (only do that when an rvalue is okay)
         if (
             !n.terms.empty()
@@ -3758,6 +3884,7 @@ public:
         }
         //  If it's "_ =" then emit static_cast<void>()
         bool emit_discard = false;
+        auto last_expr    = decltype(n.expr.get()){};
         if (
             !n.terms.empty()
             && n.terms.front().op->type() == lexeme::Assignment
@@ -3771,6 +3898,7 @@ public:
         }
         else
         {
+            last_expr = n.expr.get();
             emit(*n.expr);
         }
         suppress_move_from_last_use = false;
@@ -3862,7 +3990,33 @@ public:
                 }
                 //  Otherwise, just emit the general expression as usual
                 else {
+                    //  If this is a division, wrap the denominator in a not-zero check
+                    auto suffix = std::string{};
+                    if (
+                        flag_safe_zero_division
+                        && (
+                            x.op->type() == lexeme::Slash
+                            || x.op->type() == lexeme::SlashEq
+                            )
+                        )
+                    {
+                        assert(last_expr && "ICE: shouldn't get here without having captured a pointer to the numerator expression");
+                        if (auto lit = x.expr->get_literal();
+                            lit
+                            && lit->get_token()->type() == lexeme::DecimalLiteral
+                            )
+                        {
+                            printer.print_cpp2( "CPP2_ASSERT_NOT_ZERO_LITERAL(CPP2_TYPEOF(" + print_to_string(*last_expr) + "),", x.op->position() );
+                        }
+                        else
+                        {
+                            printer.print_cpp2( "CPP2_ASSERT_NOT_ZERO(CPP2_TYPEOF(" + print_to_string(*last_expr) + "),", x.op->position() );
+                        }
+                        suffix = ")";
+                    }
+                    last_expr = x.expr.get();
                     emit(*x.expr);
+                    printer.print_cpp2( suffix, x.expr->position() );
                 }
             }
 
@@ -3895,6 +4049,11 @@ public:
     )
         -> void
     {   STACKINSTR
+        if (n.default_initializer) {
+          printer.print_cpp2("{}", n.position());
+          return;
+        }
+
         auto add_parens =
             should_add_expression_list_parens()
             && !n.inside_initializer
@@ -3924,7 +4083,7 @@ public:
                 );
                 if (x.pass == passing_style::out) {
                     is_out = true;
-                    printer.print_cpp2("cpp2::out(&", n.position());
+                    printer.print_cpp2("cpp2::impl::out(&", n.position());
                 }
                 else if (x.pass == passing_style::move) {
                     printer.print_cpp2("std::move(", n.position());
@@ -4319,7 +4478,8 @@ public:
         //-----------------------------------------------------------------------
         //  Else handle ordinary parameters
 
-        auto param_type = print_to_string(type_id);
+        assert(n.declaration->identifier);
+        auto param_type = print_to_string(type_id, source_position{}, print_to_string(*n.declaration->identifier));
 
         //  If there are template parameters on this function or its enclosing
         //  type, see if this parameter's name is an unqualified-id with a
@@ -4344,8 +4504,8 @@ public:
                         tparam->declaration->is_type()
                         && (
                             name == tparam_name
-                            || name.find("<"+tparam_name) != std::string_view::npos
-                            || name.find(","+tparam_name) != std::string_view::npos
+                            || name.find("<"+tparam_name) != name.npos
+                            || name.find(","+tparam_name) != name.npos
                         )
                         )
                     {
@@ -4382,8 +4542,8 @@ public:
             )
         {
             switch (n.pass) {
-            break;case passing_style::in     : printer.print_cpp2( "cpp2::in<",  n.position() );
-            break;case passing_style::out    : printer.print_cpp2( "cpp2::out<", n.position() );
+            break;case passing_style::in     : printer.print_cpp2( "cpp2::impl::in<",  n.position() );
+            break;case passing_style::out    : printer.print_cpp2( "cpp2::impl::out<", n.position() );
             break;default: ;
             }
         }
@@ -4431,7 +4591,7 @@ public:
             //  and then generate the out<> as a stack local with the expected name "identifier"
             break;case passing_style::out    : printer.print_cpp2( name,           n.position() );
                                                current_functions.back().prolog.statements.push_back(
-                                                   "auto " + identifier + " = cpp2::out(" + identifier + "_); "
+                                                   "auto " + identifier + " = cpp2::impl::out(" + identifier + "_); "
                                                );
                                                identifier += "_";
 
@@ -4439,17 +4599,27 @@ public:
             break;case passing_style::forward: printer.print_cpp2( name+"&&",      n.position() );
             break;default: ;
             }
+
+            if (type_id.constraint) {
+                auto name = n.declaration->identifier->get_token();
+                assert(name);
+                auto req = print_to_string(*type_id.constraint);
+                req += "<CPP2_TYPEOF(";
+                req += *name;
+                req += ")>";
+                function_requires_conditions.push_back(req);
+            }
         }
         else if (n.pass == passing_style::forward) {
             printer.print_cpp2("auto", n.position());
 
             auto name = n.declaration->identifier->get_token();
             assert(name);
-            auto req = std::string{"std::is_same_v<CPP2_TYPEOF("};
-            req += *name;
-            req += "), ";
+            auto req = std::string{"std::is_same_v<"};
             req += param_type;
-            req += ">";
+            req += ", CPP2_TYPEOF(";
+            req += *name;
+            req += ")>";
             function_requires_conditions.push_back(req);
         }
         else {
@@ -4487,7 +4657,7 @@ public:
         if (is_returns) {
             printer.print_extra( " " + identifier );
         }
-        else {
+        else if (!n.declaration->is_object_with_function_typeid()) {
             printer.print_cpp2( " ", identifier_pos );
             if (n.declaration->is_variadic)
             {
@@ -4609,7 +4779,7 @@ public:
 
         //  If this is one of Cpp2's predefined contract groups,
         //  make it convenient to use without cpp2:: qualification
-        auto name = std::string{"cpp2::Default"};
+        auto name = std::string{"cpp2::cpp2_default"};
         if (n.group)
         {
             auto group = print_to_string(*n.group);
@@ -4617,11 +4787,11 @@ public:
                 name = group;
             }
             if (
-                name == "Default"
-                || name == "Bounds"
-                || name == "Null"
-                || name == "Type"
-                || name == "Testing"
+                name == "cpp2_default"
+                || name == "bounds_safety"
+                || name == "null_safety"
+                || name == "type_safety"
+                || name == "testing"
                 )
             {
                 name.insert(0, "cpp2::");
@@ -4631,7 +4801,7 @@ public:
         //  "Unevaluated" is for static analysis only, and are never evaluated, so just skip them
         //  (The only requirement for an Unevaluated condition is that it parses; and even that's
         //  easy to relax if we ever want to allow arbitrary tokens in an Unevaluated condition)
-        if (n.group && n.group->to_string() == "Unevaluated") {
+        if (n.group && n.group->to_string() == "unevaluated") {
             return;
         }
 
@@ -4654,16 +4824,22 @@ public:
             message = "CPP2_CONTRACT_MSG(" + print_to_string(*n.message) + ")";
         }
 
+        auto separator = std::string{""};
         printer.print_cpp2(
-            "if (" + name + ".has_handler()",
+            "if (",
             n.position()
         );
         for (auto const& flag : n.flags) {
             printer.print_cpp2(
-                " && " + print_to_string(*flag),
+                separator + print_to_string(*flag),
                 n.position()
             );
+            separator = " && ";
         }
+        printer.print_cpp2(
+            separator + name + ".is_active()",
+            n.position()
+        );
         printer.print_cpp2(
             " && !(" + print_to_string(*n.condition) + ") ) " +
                 "{ " + name + ".report_violation(" + message + "); }",
@@ -4686,12 +4862,71 @@ public:
         bool                      is_main                    = false,
         bool                      is_ctor_or_dtor            = false,
         std::string               suffix1                    = {},
-        bool                      generating_postfix_inc_dec = false
+        bool                      generating_postfix_inc_dec = false,
+        std::string               identifier                 = {}
     )
         -> void
     {   STACKINSTR
         if (!sema.check(n)) {
             return;
+        }
+
+        //  Common parts we may use in different orders
+        //
+        auto handle_default_return_type = [&]{
+            if (is_main)
+            {
+                printer.print_cpp2( " -> int", n.position() );
+            }
+            else if(!is_ctor_or_dtor)
+            {
+                printer.print_cpp2( " -> void", n.position() );
+            }
+        };
+
+        auto handle_single_anon_return_type = [&]{
+            auto is_type_scope_function_with_in_this =
+                n.my_decl
+                && n.my_decl->parent_is_type()
+                && n.parameters->ssize() > 0
+                && (*n.parameters)[0]->direction() == passing_style::in
+                ;
+
+            auto& r = std::get<function_type_node::id>(n.returns);
+            assert(r.type);
+
+            auto return_type = print_to_string(*r.type);
+
+            if (r.pass == passing_style::forward) {
+                if (r.type->is_wildcard()) {
+                    printer.print_cpp2( "auto&&", n.position() );
+                }
+                else {
+                    printer.print_cpp2( return_type, n.position() );
+                    if (is_type_scope_function_with_in_this) {
+                        printer.print_cpp2( " const&", n.position() );
+                    }
+                    else if (!generating_postfix_inc_dec) {
+                        printer.print_cpp2( "&", n.position() );
+                    }
+                }
+            }
+            else {
+                printer.print_cpp2( return_type, n.position() );
+            }
+        };
+
+
+        //  If this is not part of a declaration, just a function type-id,
+        //  the return type comes first
+        if (!n.my_decl) {
+            if (n.returns.index() == function_type_node::empty) {
+                handle_default_return_type();
+            }
+            else if (n.returns.index() == function_type_node::id) {
+                handle_single_anon_return_type();
+            }
+            printer.print_cpp2( identifier, n.position() );
         }
 
         if (
@@ -4712,7 +4947,10 @@ public:
         }
 
         //  For an anonymous function, the emitted lambda is 'constexpr' or 'mutable'
-        if (!n.my_decl->has_name())
+        if (
+            n.my_decl
+            && !n.my_decl->has_name()
+            )
         {
             if (n.my_decl->is_constexpr) {
                 //  The current design path we're trying out is for all '==' functions to be
@@ -4737,7 +4975,10 @@ public:
             n.is_move()
             || n.is_swap()
             || n.is_destructor()
-            || generating_move_from == n.my_decl
+            || (
+                n.my_decl 
+                && generating_move_from == n.my_decl
+                )
             )
         {
             printer.print_cpp2( " noexcept", n.position() );
@@ -4748,7 +4989,10 @@ public:
         //  Handle a special member function
         if (
             n.is_assignment()
-            || generating_assignment_from == n.my_decl
+            || (
+                n.my_decl 
+                && generating_assignment_from == n.my_decl
+                )
             )
         {
             assert(
@@ -4761,58 +5005,26 @@ public:
             );
         }
 
-        //  Otherwise, handle a default return type
-        else if (n.returns.index() == function_type_node::empty)
+        //  If this is a declaration, emit the trailing return type
+        else if (n.my_decl)
         {
-            if (is_main)
-            {
-                printer.print_cpp2( " -> int", n.position() );
+            //  Otherwise, handle a default return type
+            if (n.returns.index() == function_type_node::empty) {
+                handle_default_return_type();
             }
-            else if(!is_ctor_or_dtor)
-            {
-                printer.print_cpp2( " -> void", n.position() );
+
+            //  Otherwise, handle a single anonymous return type
+            else if (n.returns.index() == function_type_node::id) {
+                printer.print_cpp2( " -> ", n.position() );
+                handle_single_anon_return_type();
             }
-        }
 
-        //  Otherwise, handle a single anonymous return type
-        else if (n.returns.index() == function_type_node::id)
-        {
-            auto is_type_scope_function_with_in_this =
-                n.my_decl->parent_is_type()
-                && n.parameters->ssize() > 0
-                && (*n.parameters)[0]->direction() == passing_style::in
-                ;
-
-            printer.print_cpp2( " -> ", n.position() );
-            auto& r = std::get<function_type_node::id>(n.returns);
-            assert(r.type);
-
-            auto return_type = print_to_string(*r.type);
-
-            if (r.pass == passing_style::forward) {
-                if (r.type->is_wildcard()) {
-                    printer.print_cpp2( "auto&&", n.position() );
-                }
-                else {
-                    printer.print_cpp2( return_type, n.position() );
-                    if (is_type_scope_function_with_in_this) {
-                        printer.print_cpp2( " const&", n.position() );
-                    }
-                    else if (!generating_postfix_inc_dec) {
-                        printer.print_cpp2( "&", n.position() );
-                    }
-                }
-            }
+            //  Otherwise, handle multiple/named returns
             else {
-                printer.print_cpp2( return_type, n.position() );
+                printer.print_cpp2( " -> ", n.position() );
+                assert (n.my_decl);
+                printer.print_cpp2( multi_return_type_name(*n.my_decl), n.position());
             }
-        }
-
-        //  Otherwise, handle multiple/named returns
-        else {
-            printer.print_cpp2( " -> ", n.position() );
-            assert (n.my_decl);
-            printer.print_cpp2( multi_return_type_name(*n.my_decl), n.position());
         }
     }
 
@@ -5410,11 +5622,8 @@ public:
 
 
         //  Declarations are handled in multiple passes,
-        //  but we only want to do the sema checks once
-        if (
-            printer.get_phase() == printer.phase2_func_defs
-            && !sema.check(n)
-            )
+        //  but we only want to emit the error messages once (in phase 2)
+        if (!sema.check(n, printer.get_phase() == printer.phase2_func_defs))
         {
             return;
         }
@@ -5443,7 +5652,7 @@ public:
         auto guard0 = stack_value(having_signature_emitted, &n);
         auto guard1 = stack_element(current_declarations, &n);
         current_names.push_back(&n);
-        auto guard2 = stack_size_if(current_names, n.is_function());
+        auto guard2 = stack_size_if(current_names, !n.is_namespace());
 
         //  Handle aliases
 
@@ -5558,8 +5767,9 @@ public:
                         }
                         //  Otherwise, just emit the general expression as usual
                         else {
-                            return " = "
-                                   + print_to_string(n);
+                            return "{ "
+                                   + print_to_string(n)
+                                   + " }";
                         }
                     };
 
@@ -5623,7 +5833,7 @@ public:
                 }
 
                 else {
-                    assert(!"ICE: should be unreachable - invalid alias");
+                    assert(false && "ICE: should be unreachable - invalid alias");
                 }
 
                 return;
@@ -5682,7 +5892,7 @@ public:
                     printer.print_extra(
                         "\nusing "
                         + func_name + "_ret = "
-                        + r->parameters[0]->declaration->get_object_type()->to_string()
+                        + print_to_string( *r->parameters[0]->declaration->get_object_type() )
                         + ";"
                     );
                 }
@@ -5955,6 +6165,7 @@ public:
                             separator = ",";
                         }
                     }
+                    current_names.push_back(decl.get());
                 }
                 //  Then we'll switch to start the body == other members
                 else
@@ -6381,12 +6592,18 @@ public:
                     printer.print_cpp2( suffix2, n.position() );
 
                     //  If this is ++ or --, also generate a Cpp1 postfix version of the operator
+                    //  (as long as we don't know for sure this isn't a copyable type)
                     if (func->is_increment_or_decrement())
                     {
                         if (generating_postfix_inc_dec_from) {
                             assert (generating_postfix_inc_dec_from == &n);
                         }
-                        else {
+                        else if (
+                                !n.parent_declaration
+                                || !n.parent_declaration->is_type()
+                                || !n.parent_declaration->cannot_be_a_copy_constructible_type()
+                                )
+                        {
                             need_to_generate_postfix_inc_dec = true;
                         }
                     }
@@ -6449,7 +6666,7 @@ public:
 
                         auto loc = std::string{};
                         if (!decl.initializer) {
-                            loc += ("    cpp2::deferred_init<");
+                            loc += ("    cpp2::impl::deferred_init<");
                         }
 
                         //  For convenience, just capture the id-expression as a string
@@ -6634,17 +6851,24 @@ public:
                 printer.print_cpp2( "extern ", n.position() );
             }
 
+            assert(n.identifier);
+
             //  Emit "auto" for deduced types (of course)
             if (type->is_wildcard()) {
                 assert(n.initializer);
+                //  And the constraint if there is one
+                if (type->constraint) {
+                    emit( *type->constraint, n.position() );
+                    printer.print_cpp2(" ", n.position());
+                }
                 emit( *type, n.position() );
             }
             //  Otherwise, emit the type
             else {
-                //  If there isn't an initializer, use cpp2::deferred_init<T>
+                //  If there isn't an initializer, use deferred_init<T>
                 if (!n.initializer) {
                     if (n.parent_is_function()) {
-                        printer.print_cpp2( "cpp2::deferred_init<", n.position() );
+                        printer.print_cpp2( "cpp2::impl::deferred_init<", n.position() );
                     }
                     else if (!n.parent_is_type()) {
                         errors.emplace_back(
@@ -6654,10 +6878,10 @@ public:
                         return;
                     }
                 }
-                printer.preempt_position_push(n.position());
-                emit( *type );
+                printer.preempt_position_push(n.position()); 
+                emit( *type, {}, print_to_string(*n.identifier) ); 
                 printer.preempt_position_pop();
-                //  one pointer is enough for now, pointer-to-function fun can be later
+
                 if (
                     !n.initializer
                     && n.parent_is_function()
@@ -6668,14 +6892,19 @@ public:
             }
 
             printer.print_cpp2( " ", n.position());
-            assert(n.identifier);
 
             //  If this is anonymous object (named "_"), generate a unique name
             if (n.has_name("_")) {
                 if (n.has_wildcard_type()) {
                     errors.emplace_back(
                         n.identifier->position(),
-                        "an object can have an anonymous name or an anonymous type, but not both at the same type (rationale: if '_ := f();' were allowed to keep the returned object alive, that syntax would be dangerously close to '_ = f();' to discard the returned object, and such importantly opposite meanings deserve more than a one-character typo distance; and explicit discarding gets the nice syntax because it's likely more common)"
+                        "an object can have an anonymous name or an anonymous type, "
+                        "but not both at the same time (rationale: if '_ := f();' were "
+                        "allowed to keep the returned object alive, that syntax would "
+                        "be dangerously close to '_ = f();' to discard the returned "
+                        "object, and such importantly opposite meanings deserve more "
+                        "than a one-character typo distance; and explicit discarding "
+                        "gets the nice syntax because it's likely more common)"
                     );
                     return;
                 }
@@ -6697,7 +6926,7 @@ public:
                     n.identifier->position()
                 );
             }
-            else {
+            else if (!n.is_object_with_function_typeid()) {
                 emit(*n.identifier);
             }
 
@@ -6715,9 +6944,15 @@ public:
             if (n.initializer)
             {
                 printer.add_pad_in_this_line(-100);
-                if (type->is_concept()) {
+                if (
+                    type->is_concept()
+                    || type->is_function_typeid()
+                    )
+                {
                     printer.print_cpp2( " = ", n.position() );
-                } else {
+                }
+                else
+                {
                     printer.print_cpp2( " {", n.position() );
                 }
 
@@ -6726,7 +6961,11 @@ public:
                 emit( *n.initializer, false );
                 pop_need_expression_list_parens();
 
-                if (!type->is_concept()) {
+                if (
+                    !type->is_concept()
+                    && !type->is_function_typeid()
+                    )
+                {
                     printer.print_cpp2( "}", n.position() );
                 }
             }
@@ -6794,7 +7033,7 @@ public:
     //-----------------------------------------------------------------------
     //  debug_print
     //
-    auto debug_print()
+    auto debug_print() const
         -> void
     {
         //  Only create debug output files if we managed to load the source file.

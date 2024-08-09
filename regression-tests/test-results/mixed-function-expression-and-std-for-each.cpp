@@ -39,10 +39,10 @@
     auto callback {[](auto& x) mutable -> void { x += " maybe";  }}; 
     std::ranges::for_each(
         vec, 
-        std::move(callback)
+        cpp2::move(callback)
     );
 
-    for ( auto const& str : vec ) {
+    for ( auto const& str : cpp2::move(vec) ) {
         std::cout << str << "\n";
     }
 }

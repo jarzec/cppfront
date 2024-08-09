@@ -21,7 +21,6 @@
 #include "io.h"
 #include <map>
 #include <climits>
-#include <deque>
 #include <cstring>
 
 
@@ -84,7 +83,10 @@ enum class lexeme : std::int8_t {
     Semicolon,
     Comma,
     Dot,
+    DotDot,
     Ellipsis,
+    EllipsisLess,
+    EllipsisEqual,
     QuestionMark,
     At,
     Dollar,
@@ -181,7 +183,10 @@ auto _as(lexeme l)
     break;case lexeme::Semicolon:           return "Semicolon";
     break;case lexeme::Comma:               return "Comma";
     break;case lexeme::Dot:                 return "Dot";
+    break;case lexeme::DotDot:              return "DotDot";
     break;case lexeme::Ellipsis:            return "Ellipsis";
+    break;case lexeme::EllipsisLess:        return "EllipsisLess";
+    break;case lexeme::EllipsisEqual:       return "EllipsisEqual";
     break;case lexeme::QuestionMark:        return "QuestionMark";
     break;case lexeme::At:                  return "At";
     break;case lexeme::Dollar:              return "Dollar";
@@ -300,7 +305,9 @@ public:
         v.start(*this, depth);
     }
 
-    auto remove_prefix_if(std::string_view prefix) {
+    auto remove_prefix_if(std::string_view prefix)
+        -> void
+    {
         if (
             sv.size() > prefix.size()
             && sv.starts_with(prefix)
@@ -311,10 +318,26 @@ public:
         }
     }
 
+    auto set_global_token_order(index_t& counter) const
+        -> void
+    {
+        //  In a well-formed program we only expect to set this once
+        if (global_token_order == 0) {
+            global_token_order = ++counter;
+        }
+    }
+
+    auto get_global_token_order() const
+        -> index_t
+    {
+        return global_token_order;
+    }
+
 private:
     std::string_view sv;
     source_position  pos;
     lexeme           lex_type;
+    mutable index_t  global_token_order = 0;
 };
 
 static_assert (CHAR_BIT == 8);
@@ -326,11 +349,11 @@ auto labelized_position(token const* t)
     struct label {
         std::string text;
         label() {
-            static auto ordinal = 0;
+            static auto ordinal = 0;                                        // TODO: static
             text = std::to_string(++ordinal);
         }
     };
-    static auto labels = std::unordered_map<token const*, label const>{};
+    static auto labels = std::unordered_map<token const*, label const>{};   // TODO: static
 
     assert (t);
     return labels[t].text;
@@ -357,7 +380,6 @@ auto expand_string_literal(
 )
     -> std::string
 {
-    auto expanded_interpolation = false;
     auto const length = std::ssize(text);
 
     assert(length >= 2);
@@ -388,7 +410,7 @@ auto expand_string_literal(
     ++pos;
     auto current_start = pos;   // the current offset before which the string has been added to ret
 
-    auto parts = string_parts{std::string(text.substr(0, current_start)), // begin sequence ", U", u8" depends on the string type 
+    auto parts = string_parts{std::string(text.substr(0, current_start)), // begin sequence ", U", u8" depends on the string type
                               "\"", // end sequence
                               string_parts::on_both_ends}; // add opening and closing sequence to generated string
 
@@ -434,8 +456,13 @@ auto expand_string_literal(
 
             //  'open' is now at the matching (
 
-            //  Put the next non-empty non-interpolated chunk straight into ret
-            if (open != current_start) {
+            //  Put the next non-interpolated chunk straight into ret
+            //  unless it's an empty internal "" chunk
+            if (
+                open != current_start
+                || parts.empty()
+                )
+            {
                 parts.add_string(text.substr(current_start, open - current_start));
             }
 
@@ -487,7 +514,6 @@ auto expand_string_literal(
             parts.add_code("cpp2::to_string" + chunk);
 
             current_start = pos+1;
-            expanded_interpolation = true;
         }
     }
 
@@ -498,18 +524,8 @@ auto expand_string_literal(
     );
 
     //  Put the final non-interpolated chunk straight into ret
-    if (current_start < std::ssize(text)-1) {
-        parts.add_string(text.substr(current_start, std::ssize(text)-current_start-1));
-    }
+    parts.add_string(text.substr(current_start, std::ssize(text)-current_start-1));
 
-    //  Only for expand_string_literal: If we expanded any interpolations,
-    //  parenthesize the result to support cases like "(1)$+".append("2 is 2")
-    //  But don't do this for expand_raw_string_literal, where injecting a ) can
-    //  interfere with the closing sequence... raw literals really are raw-er
-    if (expanded_interpolation) {
-        return "(" + parts.generate() + ")";
-    }
-    //  Else
     return parts.generate();
 }
 
@@ -598,11 +614,11 @@ auto expand_raw_string_literal(
 //  A stable place to store additional text for source tokens that are merged
 //  into a whitespace-containing token (to merge the Cpp1 multi-token keywords)
 //  -- this isn't about tokens generated later, that's tokens::generated_tokens
-static auto generated_text  = std::deque<std::string>{};
-static auto generated_lines = std::deque<std::vector<source_line>>{};
+static auto generated_text  = stable_vector<std::string>{};                // TODO: static
+static auto generated_lines = stable_vector<std::vector<source_line>>{};   // TODO: static
 
 
-static auto multiline_raw_strings = std::deque<multiline_raw_string>{};
+static auto multiline_raw_strings = stable_vector<multiline_raw_string>{}; // TODO: static
 
 auto lex_line(
     std::string&               mutable_line,
@@ -739,6 +755,8 @@ auto lex_line(
                 "        short, ushort, int, uint, long, ulong, longlong, ulonglong, longdouble, _schar, _uchar\n"
                 "    - see also cpp2util.h > \"Convenience names for integer types\""
             );
+
+            return;
         }
 
         tokens.push_back(last_token);
@@ -830,9 +848,9 @@ auto lex_line(
 
         if (
             i >= 3
-            && (tokens[i-3] != "::" && tokens[i-3] != ".")
+            && (tokens[i-3] != "::" && tokens[i-3].type() != lexeme::Dot && tokens[i - 3].type() != lexeme::DotDot)
             && (tokens[i-2] == "unique" || tokens[i-2] == "shared")
-            && tokens[i-1] == "."
+            && tokens[i-1].type() == lexeme::Dot
             && tokens[i] == "new"
             )
         {
@@ -911,25 +929,49 @@ auto lex_line(
         return 0;
     };
 
+    //G simple-hexadecimal-digit-sequence:
+    //G     hexadecimal-digit
+    //G     simple-hexadecimal-digit-sequence hexadecimal-digit
+    //G
     //G hexadecimal-escape-sequence:
-    //G     '\x' hexadecimal-digit
-    //G     hexadecimal-escape-sequence hexadecimal-digit
+    //G     '\x' simple-hexadecimal-digit-sequence
+    //G     '\x{' simple-hexadecimal-digit-sequence '}'
     //G
     auto peek_is_hexadecimal_escape_sequence = [&](int offset)
     {
         if (
-            peek(  offset) == '\\'
+            peek(offset) == '\\'
             && peek(1+offset) == 'x'
-            && is_hexadecimal_digit(peek(2+offset))
+            && (
+                is_hexadecimal_digit(peek(2+offset))
+                || (peek(2+offset) == '{' && is_hexadecimal_digit(peek(3+offset)))
+                )
             )
         {
+            auto has_bracket = peek(2+offset) == '{';
             auto j = 3;
+
+            if (has_bracket) { ++j; }
+
             while (
                 peek(j+offset)
                 && is_hexadecimal_digit(peek(j+offset))
                 )
             {
                 ++j;
+            }
+
+            if (has_bracket) {
+                if (peek(j+offset) == '}') {
+                    ++j;
+                } else {
+                    errors.emplace_back(
+                        source_position(lineno, i + offset),
+                        "invalid hexadecimal escape sequence - \\x{ must"
+                        " be followed by hexadecimal digits and a closing }"
+                    );
+                    return 0;
+                }
             }
             return j;
         }
@@ -939,6 +981,7 @@ auto lex_line(
     //G universal-character-name:
     //G     '\u' hex-quad
     //G     '\U' hex-quad hex-quad
+    //G     '\u{' simple-hexadecimal-digit-sequence '}'
     //G
     //G hex-quad:
     //G     hexadecimal-digit hexadecimal-digit hexadecimal-digit hexadecimal-digit
@@ -948,6 +991,7 @@ auto lex_line(
         if (
             peek(offset) == '\\'
             && peek(1 + offset) == 'u'
+            && peek(2 + offset) != '{'
             )
         {
             auto j = 2;
@@ -961,11 +1005,43 @@ auto lex_line(
             if (j == 6) { return j; }
             errors.emplace_back(
                 source_position( lineno, i + offset ),
-                "invalid universal character name (\\u must"
-                " be followed by 4 hexadecimal digits)"
+                "invalid universal character name - \\u without { must"
+                " be followed by 4 hexadecimal digits"
             );
+            return 0;
         }
-        if (
+
+        else if (
+            peek(offset) == '\\'
+            && peek(1 + offset) == 'u'
+            && peek(2 + offset) == '{'
+            )
+        {
+            auto j = 4;
+
+            while (
+                peek(j + offset)
+                && is_hexadecimal_digit(peek(j + offset))
+                )
+            {
+                ++j;
+            }
+
+            if (peek(j + offset) == '}') {
+                ++j;
+                return j;
+            }
+            else {
+                errors.emplace_back(
+                    source_position(lineno, i + offset),
+                    "invalid universal character name - \\u{ must"
+                    " be followed by hexadecimal digits and a closing }"
+                );
+                return 0;
+            }
+        }
+
+        else if (
             peek(offset) == '\\'
             && peek(1+offset) == 'U'
             )
@@ -981,10 +1057,12 @@ auto lex_line(
             if (j == 10) { return j; }
             errors.emplace_back(
                 source_position(lineno, i+offset),
-                "invalid universal character name (\\U must"
-                    " be followed by 8 hexadecimal digits)"
+                "invalid universal character name - \\U must"
+                    " be followed by 8 hexadecimal digits"
             );
+            return 0;
         }
+
         return 0;
     };
 
@@ -1038,15 +1116,15 @@ auto lex_line(
     //G     one of: 'import' 'module' 'export' 'is' 'as'
     //G
     auto do_is_keyword = [&](std::vector<std::string_view> const& r) {
-        auto remaining_line = std::string_view(line).substr(unsafe_narrow<std::size_t>(i));
+        auto remaining_line = std::string_view(line).substr(i);
         auto m = std::find_if(r.begin(), r.end(), [&](std::string_view s) {
             return remaining_line.starts_with(s);
         });
         if (m != r.end()) {
             //  If we matched and what's next is EOL or a non-identifier char, we matched!
             if (
-                i+std::ssize(*m) == std::ssize(line)                                            // EOL
-                || !is_identifier_continue(line[unsafe_narrow<std::size_t>(i)+std::size(*m)])   // non-identifier char
+                i+std::ssize(*m) == std::ssize(line)                // EOL
+                || !is_identifier_continue(line[i+std::size(*m)])   // non-identifier char
                 )
             {
                 return static_cast<int>(std::ssize(*m));
@@ -1127,8 +1205,8 @@ auto lex_line(
         const std::string& opening_seq,
         const std::string& closing_seq,
         string_parts::adds_sequences closing_strategy,
-        std::string_view part, 
-        int pos_to_replace, 
+        std::string_view part,
+        int pos_to_replace,
         int size_to_replace
     ) -> bool {
         auto parts = expand_raw_string_literal(opening_seq, closing_seq, closing_strategy, part, errors, source_position(lineno, pos_to_replace + 1));
@@ -1161,29 +1239,6 @@ auto lex_line(
         auto peek2 = peek(2);
         auto peek3 = peek(3);
 
-        //G encoding-prefix: one of
-        //G     'u8' 'u' 'uR' 'u8R' 'U' 'UR' 'L' 'LR' 'R' 
-        //G
-        auto is_encoding_prefix_and = [&](char next) {
-            if (line[i] == next)                                        { return 1; } // "
-            else if (line[i] == 'u') {
-                if (peek1 == next)                                      { return 2; } // u"
-                else if (peek1 == '8' && peek2 == next)                 { return 3; } // u8"
-                else if (peek1 == 'R' && peek2 == next)                 { return 3; } // uR"
-                else if (peek1 == '8' && peek2 == 'R' && peek3 == next) { return 4; } // u8R"
-            } 
-            else if (line[i] == 'U') { 
-                if ( peek1 == next)                                     { return 2; } // U"
-                else if (peek1 == 'R' && peek2 == next)                 { return 3; } // UR"
-            } 
-            else if (line[i] == 'L') { 
-                if ( peek1 == next )                                    { return 2; } // L"
-                else if (peek1 == 'R' && peek2 == next)                 { return 3; } // LR" 
-            } 
-            else if (line[i] == 'R' && peek1 == next)                   { return 2; } // R"
-            return 0;
-        };
-
         //  If we're currently in a multiline comment,
         //  the only thing to look for is the */ comment end
         //
@@ -1211,7 +1266,7 @@ auto lex_line(
             auto part = line.substr(i, end_pos-i);
 
             if (const auto& rsm = raw_string_multiline.value(); rsm.should_interpolate) {
-                
+
                 auto closing_strategy = end_pos == line.npos ? string_parts::no_ends : string_parts::on_the_end;
                 auto size_to_replace  = end_pos == line.npos ? std::ssize(line) - i  : end_pos - i + std::ssize(rsm.closing_seq);
 
@@ -1222,7 +1277,7 @@ auto lex_line(
             // raw string was not expanded
 
             raw_string_multiline.value().text += part;
-            if (end_pos == std::string::npos) {
+            if (end_pos == line.npos) {
                 raw_string_multiline.value().text += '\n';
                 break;
             }
@@ -1283,7 +1338,7 @@ auto lex_line(
                         comment::comment_kind::line_comment,
                         {lineno, i},
                         {lineno, _as<colno_t>(std::ssize(line))},
-                        std::string(&line[i], std::ssize(line) - i)
+                        line.substr(i)
                         });
                     in_comment = false;
                     goto END;
@@ -1307,7 +1362,7 @@ auto lex_line(
                 }
                 else { store(1, lexeme::Less); }
 
-            //  Note: >> and >>= are not source tokens, they are synthesized from > > and > >= where legal
+            //  Note: >= and >> and >>= synthesized from > = and > > and > >= where legal
             //G     '>>=' '>>' '>=' '>'
             break;case '>':
                 //---------------------------------------------------------
@@ -1317,10 +1372,10 @@ auto lex_line(
                 //    if (peek2 == '=') { store(3, lexeme::RightShiftEq); }
                 //    else { store(2, lexeme::RightShift); }
                 //}
+                //else if (peek1 == '=') { store(2, lexeme::GreaterEq); }
                 //else
                 //---------------------------------------------------------
-                if (peek1 == '=') { store(2, lexeme::GreaterEq); }
-                else { store(1, lexeme::Greater); }
+                { store(1, lexeme::Greater); }
 
             //G     '++' '+=' '+'
             break;case '+':
@@ -1387,10 +1442,13 @@ auto lex_line(
 
             //G
             //G punctuator: one of
-            //G     '...' '.'
+            //G     '.' '..' '...' '..<' '..='
             break;case '.':
-                if (peek1 == '.' && peek2 == '.') { store(3, lexeme::Ellipsis); }
-                else { store(1, lexeme::Dot); }
+                if      (peek1 == '.' && peek2 == '.') { store(3, lexeme::Ellipsis); }
+                else if (peek1 == '.' && peek2 == '<') { store(3, lexeme::EllipsisLess); }
+                else if (peek1 == '.' && peek2 == '=') { store(3, lexeme::EllipsisEqual); }
+                else if (peek1 == '.')                 { store(2, lexeme::DotDot); }
+                else                                   { store(1, lexeme::Dot); }
 
             //G     '::' ':'
             break;case ':':
@@ -1437,8 +1495,8 @@ auto lex_line(
                     // if peek(j-2) is 'R' it means that we deal with raw-string literal
                     auto R_pos = i + 1;
                     auto seq_pos = i + 3;
-                        
-                    if (auto paren_pos = line.find("(", seq_pos); paren_pos != std::string::npos) {
+
+                    if (auto paren_pos = line.find("(", seq_pos); paren_pos != line.npos) {
                         auto opening_seq = line.substr(i, paren_pos - i + 1);
                         auto closing_seq = ")"+line.substr(seq_pos, paren_pos-seq_pos)+"\"";
 
@@ -1486,9 +1544,10 @@ auto lex_line(
                     else {
                         errors.emplace_back(
                             source_position(lineno, i + 1),
-                            "invalid new-line in raw string delimiter \"" + std::string(&line[i],3)
+                            "invalid new-line in raw string delimiter \"" + line.substr(i, 3)
                                 + "\" - stray 'R' in program \""
                         );
+                        return {};
                     }
                 } else {
                     store(1, lexeme::Dollar);
@@ -1533,7 +1592,7 @@ auto lex_line(
                             source_position(lineno, i),
                             "binary literal cannot be empty (0B must be followed by binary digits)"
                         );
-                        ++i;
+                        return {};
                     }
                 }
                 else if (peek1 == 'x' || peek1 == 'X') {
@@ -1547,7 +1606,7 @@ auto lex_line(
                             source_position(lineno, i),
                             "hexadecimal literal cannot be empty (0X must be followed by hexadecimal digits)"
                         );
-                        ++i;
+                        return {};
                     }
                 }
             }
@@ -1614,6 +1673,7 @@ auto lex_line(
                                     source_position(lineno, i),
                                     "a floating point literal must have at least one digit after the decimal point (can be '.0')"
                                 );
+                                return {};
                             }
                             while (is_separator_or(is_digit,peek(j))) {
                                 ++j;
@@ -1639,8 +1699,8 @@ auto lex_line(
                 }
 
                 //G string-literal:
-                //G     encoding-prefix? '"' s-char-seq? '"'
-                //G     encoding-prefix? 'R"' d-char-seq? '(' s-char-seq? ')' d-char-seq? '"'
+                //G     string-literal? encoding-prefix? '"' s-char-seq? '"'
+                //G     string-literal? encoding-prefix? 'R"' d-char-seq? '(' s-char-seq? ')' d-char-seq? '"'
                 //G
                 //G s-char-seq:
                 //G     interpolation? s-char
@@ -1652,12 +1712,12 @@ auto lex_line(
                 //G interpolation:
                 //G     '(' expression ')' '$'
                 //G
-                else if (auto j = is_encoding_prefix_and('\"')) {
+                else if (auto j = is_encoding_prefix_and(line, i, '\"')) {
                     // if peek(j-2) is 'R' it means that we deal with raw-string literal
-                    if (peek(j-2) == 'R') { 
+                    if (peek(j-2) == 'R') {
                         auto seq_pos = i + j;
-                            
-                        if (auto paren_pos = line.find("(", seq_pos); paren_pos != std::string::npos) {
+
+                        if (auto paren_pos = line.find("(", seq_pos); paren_pos != line.npos) {
                             auto opening_seq = line.substr(i, paren_pos - i + 1);
                             auto closing_seq = ")"+line.substr(seq_pos, paren_pos-seq_pos)+"\"";
 
@@ -1678,9 +1738,10 @@ auto lex_line(
                         else {
                             errors.emplace_back(
                                 source_position(lineno, i + j - 2),
-                                "invalid new-line in raw string delimiter \"" + std::string(&line[i],j)
+                                "invalid new-line in raw string delimiter \"" + line.substr(i, j)
                                     + "\" - stray 'R' in program \""
                             );
+                            return {};
                         }
                     }
                     else {
@@ -1688,9 +1749,10 @@ auto lex_line(
                         if (peek(j) != '\"') {
                             errors.emplace_back(
                                 source_position(lineno, i),
-                                "string literal \"" + std::string(&line[i+1],j)
+                                "string literal \"" + line.substr(i+1, j)
                                     + "\" is missing its closing \""
                             );
+                            return {};
                         }
 
                         //  At this point we have a string-literal, but it may contain
@@ -1727,7 +1789,7 @@ auto lex_line(
                 //G     c-char
                 //G     c-char-seq c-char
                 //G
-                else if (auto j = is_encoding_prefix_and('\'')) {
+                else if (auto j = is_encoding_prefix_and(line, i, '\'')) {
                     auto len = peek_is_sc_char(j, '\'');
                     if (len > 0) {
                         j += len;
@@ -1735,9 +1797,10 @@ auto lex_line(
                             assert (j > 1);
                             errors.emplace_back(
                                 source_position(lineno, i),
-                                "character literal '" + std::string(&line[i+1],j-1)
+                                "character literal '" + line.substr(i+1, j-1)
                                     + "' is missing its closing '"
                             );
+                            return {};
                         }
                         store(j+1, lexeme::CharacterLiteral);
                     }
@@ -1746,6 +1809,7 @@ auto lex_line(
                             source_position(lineno, i),
                             "character literal is empty"
                         );
+                        return {};
                     }
                 }
 
@@ -1771,18 +1835,21 @@ auto lex_line(
                             source_position(lineno, i),
                             "'const_cast' is not supported in Cpp2 - the current C++ best practice is to never cast away const, and that is const_cast's only effective use"
                         );
+                        return {};
                     }
                     if (tokens.back() == "static_cast") {
                         errors.emplace_back(
                             source_position(lineno, i),
                             "'static_cast<T>(val)' is not supported in Cpp2 - use 'val as T' for safe conversions instead, or if necessary cpp2::unsafe_narrow<T>(val) for a possibly-lossy narrowing conversion"
                         );
+                        return {};
                     }
                     if (tokens.back() == "dynamic_cast") {
                         errors.emplace_back(
                             source_position(lineno, i),
                             "'dynamic_cast<Derived*>(pBase)' is not supported in Cpp2 - use 'pBase as *Derived' for safe dynamic conversions instead"
                         );
+                        return {};
                     }
                 }
 
@@ -1809,12 +1876,14 @@ auto lex_line(
                                 source_position(lineno, i),
                                 "'NULL' is not supported in Cpp2 - for a local pointer variable, leave it uninitialized instead, and set it to a non-null value when you have one"
                             );
+                            return {};
                         }
                         if (tokens.back() == "delete") {
                             errors.emplace_back(
                                 source_position(lineno, i),
                                 "'delete' and owning raw pointers are not supported in Cpp2 - use unique.new<T> or shared.new<T> instead in that order (or, in the future, gc.new<T>, but that is not yet implemented)"
                             );
+                            return {};
                         }
                     }
                 }
@@ -1828,6 +1897,7 @@ auto lex_line(
                         false,
                         true    // a noisy fallback error message
                     );
+                    return {};
                 }
             }
         }
@@ -1869,7 +1939,7 @@ class tokens
     std::vector<comment> comments;
 
     //  A stable place to store additional tokens that are synthesized later
-    std::deque<token> generated_tokens;
+    stable_vector<token> generated_tokens;
 
 public:
     //-----------------------------------------------------------------------
@@ -2054,7 +2124,7 @@ public:
 
 };
 
-static auto generated_lexers = std::deque<tokens>{};
+static auto generated_lexers = stable_vector<tokens>{};    // TODO: static
 
 }
 

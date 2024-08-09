@@ -16,6 +16,7 @@
 //===========================================================================
 
 #include "parse.h"
+#include "cpp2regex.h"
 
 cpp2: namespace = {
 
@@ -35,7 +36,7 @@ compiler_services: @polymorphic_base @copyable type =
     //
     errors               : *std::vector<error_entry>;
     errors_original_size : int;
-    generated_tokens     : *std::deque<token>;
+    generated_tokens     : *stable_vector<token>;
     parser               : cpp2::parser;
     metafunction_name    : std::string = ();
     metafunction_args    : std::vector<std::string> = ();
@@ -46,7 +47,7 @@ compiler_services: @polymorphic_base @copyable type =
     operator=: (
         out this,
         errors_          : *std::vector<error_entry>,
-        generated_tokens_: *std::deque<token>
+        generated_tokens_: *stable_vector<token>
     )
     = {
         errors = errors_;
@@ -101,7 +102,7 @@ compiler_services: @polymorphic_base @copyable type =
         if  source.ssize() > 1
             && newline_pos != source.npos
         {
-            while newline_pos != std::string_view::npos
+            while newline_pos != source.npos
             {
                 add_line( source.substr(0, newline_pos) );
                 source.remove_prefix( newline_pos+1 );
@@ -167,10 +168,13 @@ compiler_services: @polymorphic_base @copyable type =
     //
     report_violation: (this, msg) = {
         error(msg);
-        throw( std::runtime_error("  ==> programming bug found in metafunction @(metafunction_name)$ - contract violation - see previous errors") );
+        throw( std::runtime_error(
+            "  ==> programming bug found in metafunction @(metafunction_name)$ "
+            "- contract violation - see previous errors"
+        ) );
     }
 
-    has_handler:(this) true;
+    is_active:(this) true;
 }
 
 
@@ -317,7 +321,7 @@ declaration: @polymorphic_base @copyable type =
     parent_is_polymorphic: (this) -> bool = n*.parent_is_polymorphic();
 
     mark_for_removal_from_enclosing_type: (inout this)
-        pre<Type>( parent_is_type() )               // this precondition should be sufficient ...
+        pre<type_safety>( parent_is_type() )        // this precondition should be sufficient ...
     = {
         test := n*.type_member_mark_for_removal();
         assert( test );                             // ... to ensure this assert is true
@@ -345,8 +349,11 @@ function_declaration: @copyable type =
     index_of_parameter_named     : (this, s: std::string_view) -> int  = n*.index_of_parameter_named(s);
     has_parameter_named          : (this, s: std::string_view) -> bool = n*.has_parameter_named(s);
     has_in_parameter_named       : (this, s: std::string_view) -> bool = n*.has_in_parameter_named(s);
+    has_copy_parameter_named     : (this, s: std::string_view) -> bool = n*.has_copy_parameter_named(s);
+    has_inout_parameter_named    : (this, s: std::string_view) -> bool = n*.has_inout_parameter_named(s);
     has_out_parameter_named      : (this, s: std::string_view) -> bool = n*.has_out_parameter_named(s);
     has_move_parameter_named     : (this, s: std::string_view) -> bool = n*.has_move_parameter_named(s);
+    has_forward_parameter_named  : (this, s: std::string_view) -> bool = n*.has_forward_parameter_named(s);
     first_parameter_name         : (this) -> std::string               = n*.first_parameter_name();
 
     has_parameter_with_name_and_pass: (this, s: std::string_view, pass: passing_style) -> bool
@@ -406,7 +413,7 @@ function_declaration: @copyable type =
             error( "cannot add an initializer that is not a valid statement");
             return;
         }
-        require (n*.add_function_initializer(stmt),
+        require (n*.add_function_initializer(move stmt),
                  std::string("unexpected error while attempting to add initializer"));
     }
 }
@@ -470,7 +477,9 @@ type_declaration: @copyable type =
         for get_members()
         do  (m) {
             m.require( !m.has_name( name ),
-                       "in a '(get_metafunction_name())$' type, the name '(name)$' is reserved for use by the '(get_metafunction_name())$' implementation");
+                       "in a '(get_metafunction_name())$' type, the name '(name)$' "
+                       "is reserved for use by the '(get_metafunction_name())$' implementation"
+            );
         }
         if constexpr !CPP2_PACK_EMPTY(etc) {
             reserve_names( etc... );
@@ -572,7 +581,7 @@ type_declaration: @copyable type =
         if !decl*.is_declaration() {
             error("cannot add a member that is not a declaration");
         }
-        require( n*.add_type_member(decl),
+        require( n*.add_type_member(move decl),
                  std::string("unexpected error while attempting to add member:\n") + source );
     }
 
@@ -804,7 +813,13 @@ copyable: (inout t: meta::type_declaration) =
             || smfs.inout_this_move_that
         )
     {
-        t.error( "this type is partially copyable/movable - when you provide any of the more-specific operator= signatures, you must also provide the one with the general signature (out this, that); alternatively, consider removing all the operator= functions and let them all be generated for you with default memberwise semantics" );
+        t.error( 
+            "this type is partially copyable/movable - when you provide "
+            "any of the more-specific operator= signatures, you must also provide "
+            "the one with the general signature (out this, that); alternatively, "
+            "consider removing all the operator= functions and let them all be "
+            "generated for you with default memberwise semantics" 
+        );
     }
     else if !smfs.out_this_in_that {
         t.add_member( "operator=: (out this, that) = { }");
@@ -926,6 +941,11 @@ cpp1_rule_of_zero: (inout t: meta::type_declaration) =
 //
 struct: (inout t: meta::type_declaration) =
 {
+    ctor_params: std::string = ();
+    ctor_inits : std::string = ();
+
+    found_member_without_initializer: = false;
+
     for t.get_members() do (inout m)
     {
         m.require( m.make_public(),
@@ -937,8 +957,32 @@ struct: (inout t: meta::type_declaration) =
             t.require( !mf.has_name("operator="),
                        "a struct may not have a user-defined operator=");
         }
+        else if m.is_object() {
+            mo: = m.as_object();
+            if mo.name() != "this" {
+                ctor_params += "(mo.name())$_, ";
+                ctor_inits  += "(mo.name())$ = (mo.name())$_; ";
+            }
+            else {
+                ctor_inits += "(mo.type())$ = (); ";
+            }
+            found_member_without_initializer |= !mo.has_initializer();
+        }
     }
     t.cpp1_rule_of_zero();
+
+    //  If we found any data members
+    if !ctor_params.empty()
+    {
+        //  Then to enable construction from corresponding values
+        //  requires a constructor... an exception to the rule of zero
+        t.add_member("    operator=: (implicit out this, (ctor_params)$) = { (ctor_inits)$ }");
+
+        //  And if all members had initializers, we need a default constructor
+        if !found_member_without_initializer {
+            t.add_member("    operator=: (implicit out this) = { }");
+        }
+    }
 }
 
 
@@ -997,7 +1041,10 @@ basic_enum: (
 
         mo := m.as_object();
         if !mo.has_wildcard_type() {
-            mo.error( "an explicit underlying type should be specified as a template argument to the metafunction - try 'enum<u16>' or 'flag_enum<u64>'");
+            mo.error( 
+                "an explicit underlying type should be specified as a compile-time argument "
+                "to the metafunction - try 'enum<u16>' or 'flag_enum<u64>'"
+            );
         }
 
         init := mo.initializer();
@@ -1022,6 +1069,7 @@ basic_enum: (
         enumerators.push_back( e );
 
         mo.mark_for_removal_from_enclosing_type();
+        _ = mo;
     }
 
     if (enumerators.empty()) {
@@ -1033,7 +1081,9 @@ basic_enum: (
     if underlying_type == ""
     {
         t.require( !found_non_numeric,
-            "if you write an enumerator with a non-numeric-literal value, you must specify the enumeration's underlying type");
+            "if you write an enumerator with a non-numeric-literal value, "
+            "you must specify the enumeration's underlying type"
+        );
 
         if !bitwise {
             if min_value >= std::numeric_limits<i8>::min() && max_value <= std::numeric_limits<i8>::max() {
@@ -1049,7 +1099,10 @@ basic_enum: (
                 underlying_type = "i64";
             }
             else {
-                t.error( "values are outside the range representable by the largest supported underlying signed type (i64)" );
+                t.error(
+                    "values are outside the range representable by the "
+                    "largest supported underlying signed type (i64)" 
+                );
             }
         }
         else {
@@ -1087,7 +1140,8 @@ basic_enum: (
 
     //  Generate all the private implementation
     t.add_member( "    _value            : (underlying_type)$;");
-    t.add_member( "    private operator= : (implicit out this, _val: i64) == _value = cpp2::unsafe_narrow<(underlying_type)$>(_val);");
+    t.add_member( "    private operator= : (implicit out this, _val: i64) == "
+                                            "_value = cpp2::unsafe_narrow<(underlying_type)$>(_val);");
 
     //  Generate the bitwise operations
     if bitwise {
@@ -1097,7 +1151,7 @@ basic_enum: (
         t.add_member( "    operator| : (       this, that ) -> (t.name())$  == _value |  that._value;");
         t.add_member( "    operator& : (       this, that ) -> (t.name())$  == _value &  that._value;");
         t.add_member( "    operator^ : (       this, that ) -> (t.name())$  == _value ^  that._value;");
-        t.add_member( "    has       : ( inout this, that ) -> bool         == _value &  that._value;");
+        t.add_member( "    has       : (       this, that ) -> bool         == _value &  that._value;");
         t.add_member( "    set       : ( inout this, that )                 == _value |= that._value;");
         t.add_member( "    clear     : ( inout this, that )                 == _value &= that._value~;");
     }
@@ -1113,38 +1167,100 @@ basic_enum: (
     t.add_member( "    operator=         : (out this, that) == { }");
     t.add_member( "    operator<=>       : (this, that) -> std::strong_ordering;");
 
-    //  Provide a 'to_string' function to print enumerator name(s)
-    (copy to_string: std::string = "    to_string: (this) -> std::string = { \n")
+    //  Provide 'to_string' and 'to_code' functions to print enumerator
+    //  name(s) as human-readable strings or as code expressions
+    (copy to_string_impl: std::string = "    to_string_impl: (this, prefix: std::string_view")
     {
         if bitwise {
-            to_string += "    _ret   : std::string = \"(\";\n";
-            to_string += "    _comma : std::string = ();\n";
-            to_string += "    if this == none { return \"(none)\"; }\n";
+            to_string_impl += ", separator: std::string_view ) -> std::string = { \n"
+                              "    ret : std::string = \"(\";\n"
+                              "    sep : std::string = ();\n"
+                              "    if this == none { return \"(none)\"; }\n";
         }
+        else {
+            to_string_impl += ") -> std::string = { \n";
+        }
+
+        to_string_impl += "    pref := cpp2::to_string(prefix);\n";
 
         for  enumerators
         do   (e) {
             if e.name != "_" {  // ignore unnamed values
                 if bitwise {
                     if e.name != "none" {
-                        to_string += "    if (this & (e.name)$) == (e.name)$ { _ret += _comma + \"(e.name)$\"; _comma = \", \"; }\n";
+                        to_string_impl += "    if (this & (e.name)$) == (e.name)$ { "
+                                                  "ret += sep + pref + \"(e.name)$\"; sep = separator; "
+                                              "}\n";
                     }
                 }
                 else {
-                    to_string += "    if this == (e.name)$ { return \"(e.name)$\"; }\n";
+                    to_string_impl += "    if this == (e.name)$ { return pref + \"(e.name)$\"; }\n";
                 }
             }
         }
 
         if bitwise {
-            to_string += "    return _ret+\")\";\n}\n";
+            to_string_impl += "    return ret+\")\";\n}\n";
         }
         else {
-            to_string += "    return \"invalid (t.name())$ value\";\n}\n";
+            to_string_impl += "    return \"invalid (t.name())$ value\";\n}\n";
         }
 
-        t.add_member( to_string );
+        t.add_member( to_string_impl );
     }
+
+    if bitwise {
+        t.add_member( "    to_string: (this) -> std::string = to_string_impl( \"\", \", \" );" );
+        t.add_member( "    to_code  : (this) -> std::string = to_string_impl( \"(t.name())$::\", \" | \" );" );
+    }
+    else {
+        t.add_member( "    to_string: (this) -> std::string = to_string_impl( \"\" );" );
+        t.add_member( "    to_code  : (this) -> std::string = to_string_impl( \"(t.name())$::\" );" );
+    }
+
+    //  Provide a 'from_string' function to parse strings into enumerators    
+    (copy from_string: std::string = "    from_string: (s: std::string_view) -> (t.name())$ = { \n")
+    {
+        prefix    : std::string_view = "";
+        combine_op: std::string_view = "return";
+
+        //  For flags, accept a list that we break apart and then |= together
+        if bitwise 
+        {
+            prefix      = "flag_";
+            combine_op  = "ret |=";
+
+            from_string += "        ret := none;\n"
+                           "        outer: do {\n"
+                           "        for cpp2::string_util::split_string_list(s) do (x) {\n";
+        }
+        //  Otherwise, accept just a single string
+        else {
+            from_string += "        x := s;\n";
+        }
+
+        (copy else_: std::string_view = "")
+        for  enumerators
+        do   (e) {
+            from_string += "            (else_)$if \"(e.name)$\" == x { (combine_op)$ (e.name)$; }\n";
+            else_ = "else ";
+        }
+
+        if bitwise {
+            from_string += "            else { break outer; }\n"
+                           "        }\n"
+                           "        return ret;\n"
+                           "        } while false;\n";
+        }
+
+        from_string += "        cpp2::type_safety.report_violation( (\"can't convert string '\" + cpp2::to_string(s) + \"' to (prefix)$enum of type (t.name())$\").c_str() );\n"
+                       "        return (default_value)$;\n"
+                       "    }\n\n";
+
+        t.add_member( from_string );
+    }
+
+    t.add_member( "    from_code: (s: std::string_view) -> (t.name())$ = { str: std::string = s; return from_string( cpp2::string_util::replace_all(str, \"(t.name())$::\", \"\" ) ); }" );
 }
 
 
@@ -1243,21 +1359,26 @@ union: (inout t : meta::type_declaration)
     if    m.is_member_object()
     {
         m.require( m.is_public() || m.is_default_access(),
-                   "a union alternative cannot be protected or private");
+                   "a union alternative cannot be protected or private"
+                );
 
         m.require( !m.name().starts_with("is_")
                    && !m.name().starts_with("set_"),
-                   "a union alternative's name cannot start with 'is_' or 'set_' - that could cause user confusion with the 'is_alternative' and 'set_alternative' generated functions");
+                   "a union alternative's name cannot start with 'is_' or 'set_' - that could cause "
+                   "user confusion with the 'is_alternative' and 'set_alternative' generated functions"
+                );
 
         mo := m.as_object();
         mo.require( mo.initializer().empty(),
-                    "a union alternative cannot have an initializer");
+                    "a union alternative cannot have an initializer"
+                );
 
         //  Adding local variable 'e' to work around a Clang warning
         e: value_member_info = ( mo.name() as std::string, mo.type(), value as std::string );
         alternatives.push_back( e );
 
         mo.mark_for_removal_from_enclosing_type();
+        _ = mo;
     }
 
     discriminator_type: std::string = ();
@@ -1282,20 +1403,16 @@ union: (inout t : meta::type_declaration)
     //  Provide storage
     (copy storage: std::string = "    _storage: cpp2::aligned_storage<cpp2::max( ")
     {
-        (copy comma: std::string = "")
         for  alternatives
-        next comma = ", "
         do   (e) {
-            storage += comma + "sizeof((e.type)$)";
+            storage += "sizeof((e.type)$), ";
         }
 
         storage += "), cpp2::max( ";
 
-        (copy comma: std::string = "")
         for  alternatives
-        next comma = ", "
         do   (e) {
-            storage += comma + "alignof((e.type)$)";
+            storage += "alignof((e.type)$), ";
         }
 
         storage += " )> = ();\n";
@@ -1311,13 +1428,27 @@ union: (inout t : meta::type_declaration)
     {
         t.add_member( "    is_(a.name)$: (this) -> bool = _discriminator == (a.value)$;\n");
 
-        t.add_member( "    (a.name)$: (this) -> forward (a.type)$ pre(is_(a.name)$()) = reinterpret_cast<* const (a.type)$>(_storage&)*;\n");
+        t.add_member( "    (a.name)$: (this) -> forward (a.type)$ pre(is_(a.name)$()) = "
+                            "reinterpret_cast<* const (a.type)$>(_storage&)*;\n"
+                    );
 
-        t.add_member( "    (a.name)$: (inout this) -> forward (a.type)$ pre(is_(a.name)$()) = reinterpret_cast<*(a.type)$>(_storage&)*;\n");
+        t.add_member( "    (a.name)$: (inout this) -> forward (a.type)$ pre(is_(a.name)$()) = "
+                            "reinterpret_cast<*(a.type)$>(_storage&)*;\n"
+                    );
 
-        t.add_member( "    set_(a.name)$: (inout this, _value: (a.type)$) = { if !is_(a.name)$() { _destroy(); std::construct_at( reinterpret_cast<*(a.type)$>(_storage&), _value); } else { reinterpret_cast<*(a.type)$>(_storage&)* = _value; } _discriminator = (a.value)$; }\n");
+        t.add_member( "    set_(a.name)$: (inout this, _value: (a.type)$) = { "
+                            "if !is_(a.name)$() { _destroy(); std::construct_at( reinterpret_cast<*(a.type)$>(_storage&), _value); } "
+                            "else { reinterpret_cast<*(a.type)$>(_storage&)* = _value; } "
+                            "_discriminator = (a.value)$; "
+                            "}\n"
+                    );
 
-        t.add_member( "    set_(a.name)$: (inout this, forward _args...: _) = { if !is_(a.name)$() { _destroy(); std::construct_at( reinterpret_cast<*(a.type)$>(_storage&), _args...); } else { reinterpret_cast<*(a.type)$>(_storage&)* = :(a.type)$ = (_args...); } _discriminator = (a.value)$; }\n");
+        t.add_member( "    set_(a.name)$: (inout this, forward _args...: _) = { "
+                            "if !is_(a.name)$() { _destroy(); std::construct_at( reinterpret_cast<*(a.type)$>(_storage&), _args...); } "
+                            " else { reinterpret_cast<*(a.type)$>(_storage&)* = :(a.type)$ = (_args...); } "
+                            "_discriminator = (a.value)$; "
+                            "}\n"
+                    );
     }
 
     //  Add destroy
@@ -1328,13 +1459,13 @@ union: (inout t : meta::type_declaration)
             destroy += "        if _discriminator == (a.value)$ { std::destroy_at( reinterpret_cast<*(a.type)$>(_storage&) ); }\n";
         }
 
-        destroy += "        _discriminator = -1;\n";
-        destroy += "    }\n";
+        destroy += "        _discriminator = -1;\n"
+                   "    }\n";
         t.add_member( destroy );
     }
 
     //  Add the destructor
-    t.add_member( "    operator=: (move this) = { _destroy(); }" );
+    t.add_member( "    operator=: (move this) = { _destroy(); _ = this; }" );
 
     //  Add default constructor
     t.add_member( "    operator=: (out this) = { }" );
@@ -1348,15 +1479,15 @@ union: (inout t : meta::type_declaration)
         }
         value_set += "    }\n";
 
-        t.add_member( std::string("    operator=: (out this, that) = {\n")
-                    + "        _storage = ();\n"
-                    + "        _discriminator = -1;\n"
-                    + value_set
+        t.add_member( "    operator=: (out this, that) = {\n"
+                      "        _storage = ();\n"
+                      "        _discriminator = -1;\n"
+                      + value_set
                     );
-        t.add_member( std::string("    operator=: (inout this, that) = {\n")
-                    + "        _storage = _;\n"
-                    + "        _discriminator = _;\n"
-                    + value_set
+        t.add_member( "    operator=: (inout this, that) = {\n"
+                      "        _storage = _;\n"
+                      "        _discriminator = _;\n"
+                      + value_set
                     );
     }
 }
@@ -1369,6 +1500,73 @@ union: (inout t : meta::type_declaration)
 print: (t: meta::type_declaration) =
 {
     std::cout << t.print() << "\n";
+}
+
+
+//-----------------------------------------------------------------------
+//
+//  regex - creates regular expressions from members
+//
+//  Each member that starts with `regex` is replaced by a regular expression
+//  of the initializer string. E.g.:
+//  ```
+//    regex := "ab";
+//  ```
+//  is replaced with
+//  ```
+//    regex := ::cpp2::regex::regular_expression<...>;
+//  ```
+//
+regex_gen: (inout t: meta::type_declaration) =
+{
+    has_default := false;
+    exact_name  := "regex";
+    prefix      := "regex_";
+    expressions : std::map<std::string, std::string> = ();
+
+    for t.get_member_objects() do (inout m)
+    {
+        name: std::string = m.name();
+
+        if name.starts_with(prefix) || name == exact_name
+        {
+            if !m.has_initializer() {
+                t.error("Regular expression must have an initializer.");
+            }
+            m.mark_for_removal_from_enclosing_type();
+
+            if name == exact_name {
+                if has_default {
+                    t.error("Type can only contain one default named regular expression.");
+                }
+                has_default = true;
+            }
+
+            expr: std::string = m.initializer();
+            if expr.starts_with("R\"(") && expr.ends_with(")\"") {
+                expr = expr.substr(3, expr.size() - 5);
+            }
+            else if string_util::is_escaped(expr) {
+                expr = expr.substr(1, expr.size() - 2);
+            }
+            else {
+                t.error("Unknown string format '(expr)$'");
+            }
+
+            expressions[name] = expr;
+        }
+    }
+
+    t.remove_marked_members();
+
+    for expressions do (expr) {
+        regular_expression := ::cpp2::regex::generate_regex(expr.second, :(message) = t$.error(message););
+
+        if !regular_expression..empty() {
+            t.add_member("public (expr.first)$_matcher: type = (regular_expression)$");
+            t.add_member("public (expr.first)$: cpp2::regex::regular_expression<char, (expr.first)$_matcher> = ();");
+        }
+    }
 }
 
 
@@ -1389,8 +1587,12 @@ apply_metafunctions: (
     for  rtype.get_members()
     do   (m)
     {
-        m.require( !m.name().starts_with("_") || m.name().ssize() == 1,
-                    "a type that applies a metafunction cannot have a body that declares a name that starts with '_' - those names are reserved for the metafunction implementation");
+        m.require( 
+            !m.name().starts_with("_") || m.name().ssize() == 1,
+            "a type that applies a metafunction cannot have a body that declares "
+            "a name that starts with '_' - those names are reserved for the "
+            "metafunction implementation"
+        );
     }
 
     //  For each metafunction, apply it
@@ -1459,9 +1661,17 @@ apply_metafunctions: (
         else if name == "print" {
             print( rtype );
         }
+        else if name == "regex" {
+            regex_gen( rtype );
+        }
         else {
             error( "unrecognized metafunction name: " + name );
-            error( "(temporary alpha limitation) currently the supported names are: interface, polymorphic_base, ordered, weakly_ordered, partially_ordered, copyable, basic_value, value, weakly_ordered_value, partially_ordered_value, struct, enum, flag_enum, union, cpp1_rule_of_zero, print" );
+            error( 
+                "(temporary alpha limitation) currently the supported names are: "
+                "interface, polymorphic_base, ordered, weakly_ordered, partially_ordered, "
+                "copyable, basic_value, value, weakly_ordered_value, partially_ordered_value, "
+                "struct, enum, flag_enum, union, cpp1_rule_of_zero, regex, print"
+            );
             return false;
         }
 

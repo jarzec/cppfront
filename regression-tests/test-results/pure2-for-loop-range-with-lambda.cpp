@@ -43,8 +43,8 @@ auto main(int const argc_, char** argv_) -> int{
    }
 
    // OK
-   auto temp {CPP2_UFCS(first)(std::move(ints), [](auto const& x) mutable -> auto { return x;  })}; 
-   for ( auto const& i : temp ) {
+   auto temp {CPP2_UFCS(first)(cpp2::move(ints), [](auto const& x) mutable -> auto { return x;  })}; 
+   for ( auto const& i : cpp2::move(temp) ) {
       std::cout << i;
    }
 
