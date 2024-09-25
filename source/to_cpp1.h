@@ -1930,7 +1930,7 @@ public:
                 }
                 identifier = "(" + identifier + ")";
             }
-            emit( *std::get<type_id_node::function>(n.id), false, false, {}, false, identifier );
+            emit( *std::get<type_id_node::function>(n.id), false, false, true, {}, false, identifier );
             return;
         }
 
@@ -4918,6 +4918,7 @@ public:
         function_type_node const& n,
         bool                      is_main                    = false,
         bool                      is_ctor_or_dtor            = false,
+        bool                      is_template_parameter      = {},
         std::string const&        suffix1                    = {},
         bool                      generating_postfix_inc_dec = false,
         std::string const&        identifier                 = {}
@@ -5000,7 +5001,7 @@ public:
             );
         }
         else {
-            emit(*n.parameters, false, false, generating_postfix_inc_dec);
+            emit(*n.parameters, false, is_template_parameter, generating_postfix_inc_dec);
         }
 
         //  For an anonymous function, the emitted lambda is 'constexpr' or 'mutable'
@@ -6645,7 +6646,7 @@ public:
                     }
 
                     emit( *n.name() );
-                    emit( *func, is_main, false, suffix1, generating_postfix_inc_dec_from != nullptr );
+                    emit( *func, is_main, false, false, suffix1, generating_postfix_inc_dec_from != nullptr );
                     printer.print_cpp2( suffix2, n.position() );
 
                     //  If this is ++ or --, also generate a Cpp1 postfix version of the operator
