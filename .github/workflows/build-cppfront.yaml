@@ -1,16 +1,18 @@
 name: Multi-platform Build of cppfront
 on:
-  push:
-    branches:
-      - main
   pull_request:
-    branches:
-      - main
+    paths-ignore:
+      - 'docs/**'
+  push:
+    paths-ignore:
+      - 'docs/**'
+  workflow_dispatch:
+
 jobs:
   build-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: ilammy/msvc-dev-cmd@v1
       - name: Compiler name & version
         run: cl.exe
@@ -20,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runs-on: [ubuntu-latest]
+        runs-on: [ubuntu-22.04]
         compiler: [g++-10, g++-11, g++-12, clang++-12, clang++-14]
         cxx-std: ['c++20', 'c++2b']
         exclude:
@@ -33,18 +35,33 @@ jobs:
           - compiler: clang++-14
             cxx-std: 'c++2b'
         include:
-          - runs-on: macos-11
-            compiler: clang++
-            cxx-std: 'c++20'
           - runs-on: macos-latest
             compiler: clang++
             cxx-std: 'c++20'
+          - runs-on: ubuntu-22.04
+            compiler: clang++-15
+            cxx-std: 'c++20'
+          - runs-on: ubuntu-24.04
+            compiler: clang++-16
+            cxx-std: 'c++20'
+          - runs-on: ubuntu-24.04
+            compiler: clang++-17
+            cxx-std: 'c++20'
+          - runs-on: ubuntu-24.04
+            compiler: clang++-18
+            cxx-std: 'c++20'
+          - runs-on: ubuntu-24.04
+            compiler: clang++-18
+            cxx-std: 'c++23'
+          - runs-on: ubuntu-24.04
+            compiler: g++-14
+            cxx-std: 'c++2b'
     runs-on: ${{ matrix.runs-on }}
     env:
       CXX: ${{ matrix.compiler }}
       CXXFLAGS: -std=${{ matrix.cxx-std }} -Wall -Wextra -Wold-style-cast -Wunused-parameter -Wpedantic -Werror -pthread -Wno-unknown-warning -Wno-unknown-warning-option
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     - name: Install compiler
       if: startsWith(matrix.runs-on, 'ubuntu')
       run: sudo apt-get install -y $CXX

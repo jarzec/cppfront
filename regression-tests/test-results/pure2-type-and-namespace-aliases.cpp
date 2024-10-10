@@ -73,24 +73,24 @@ namespace N {
 auto myfunc() -> void{
     N1::pmr_vec<myclass::str> v {"xyzzy", "plugh"}; 
 {
-auto const& v2{std::move(v)};
+auto const& v2{cpp2::move(v)};
 
 #line 21 "pure2-type-and-namespace-aliases.cpp2"
     for ( auto const& s : v2 ) 
-        std::cout << (cpp2::to_string(s) + "\n");
+        std::cout << "" + cpp2::to_string(s) + "\n";
 }
 #line 23 "pure2-type-and-namespace-aliases.cpp2"
 }
 
 #line 26 "pure2-type-and-namespace-aliases.cpp2"
-    template <typename T> inline CPP2_CONSTEXPR int myclass2<T>::value = 42;
+    template <typename T> inline CPP2_CONSTEXPR int myclass2<T>::value{ 42 };
 
 #line 29 "pure2-type-and-namespace-aliases.cpp2"
 auto main() -> int{
     using view = std::string_view;
     namespace N4 = std::literals;
 
-    auto constexpr myfunc2 = myfunc;
+    auto constexpr myfunc2{ myfunc };
     myfunc2();
 }
 
