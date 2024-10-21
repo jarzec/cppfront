@@ -14,7 +14,7 @@
 #line 1 "pure2-forward-return.cpp2"
 
 #line 2 "pure2-forward-return.cpp2"
-[[nodiscard]] auto first(auto&& rng) -> auto&&;
+[[nodiscard]] auto first(auto&& rng) -> decltype(auto);
 
 #line 7 "pure2-forward-return.cpp2"
 extern int const global;
@@ -27,11 +27,11 @@ extern int const global;
 #line 1 "pure2-forward-return.cpp2"
 
 #line 2 "pure2-forward-return.cpp2"
-[[nodiscard]] auto first(auto&& rng) -> auto&& { 
-    if (cpp2::Bounds.has_handler() && !(!(std::empty(rng))) ) { cpp2::Bounds.report_violation(""); }
+[[nodiscard]] auto first(auto&& rng) -> decltype(auto) { 
+    if (cpp2::bounds_safety.is_active() && !(!(std::empty(rng))) ) { cpp2::bounds_safety.report_violation(""); }
 
 #line 5 "pure2-forward-return.cpp2"
-    return *cpp2::assert_not_null(std::begin(CPP2_FORWARD(rng)));  }
+    return *cpp2::impl::assert_not_null(std::begin(CPP2_FORWARD(rng)));  }
 
 int const global {42}; 
 #line 8 "pure2-forward-return.cpp2"
@@ -41,7 +41,7 @@ int const global {42};
 [[nodiscard]] auto main() -> int{
     std::vector v {1, 2, 3}; 
     first(v) = 4;
-    std::cout << first(std::move(v)) << std::endl;// prints: 4
+    std::cout << first(cpp2::move(v)) << std::endl;// prints: 4
     std::cout << f() << std::endl; // prints: 42
 }
 
