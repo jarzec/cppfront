@@ -171,11 +171,12 @@ else
 
     compiler_version=$("$cxx_compiler" --version)
 
-    if [[ "$compiler_version" == *"Apple clang version 14.0"* ||
-          "$compiler_version" == *"Homebrew clang version 15.0"* ]]; then
+    if [[ "$compiler_version" == *"Apple clang version 14.0"* ]]; then
         exec_out_dir="$expected_results_dir/apple-clang-14"
     elif [[ "$compiler_version" == *"Apple clang version 15.0"* ]]; then
         exec_out_dir="$expected_results_dir/apple-clang-15"
+    elif [[ "$compiler_version" == *"Apple clang version 16.0"* ]]; then
+        exec_out_dir="$expected_results_dir/apple-clang-16"
     elif [[ "$compiler_version" == *"clang version 12.0"* ]]; then 
         exec_out_dir="$expected_results_dir/clang-12"
     elif [[ "$compiler_version" == *"clang version 15.0"* ]]; then 

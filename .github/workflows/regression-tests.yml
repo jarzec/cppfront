@@ -55,6 +55,11 @@ jobs:
             compiler: clang++-12
             cxx_std: c++20
             stdlib: libstdc++
+          - os: macos-15
+            shortosname: mac-15
+            compiler: clang++
+            cxx_std: c++2b
+            stdlib: default
           - os: macos-14
             shortosname: mac-14
             compiler: clang++
@@ -63,11 +68,6 @@ jobs:
           - os: macos-13
             shortosname: mac-13
             compiler: clang++
-            cxx_std: c++2b
-            stdlib: default
-          - os: macos-13
-            shortosname: mac-13
-            compiler: clang++-15
             cxx_std: c++2b
             stdlib: default
           - os: windows-2022
