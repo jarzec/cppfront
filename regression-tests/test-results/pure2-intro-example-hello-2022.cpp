@@ -15,7 +15,7 @@
 [[nodiscard]] auto main() -> int;
 
 #line 11 "pure2-intro-example-hello-2022.cpp2"
-[[nodiscard]] auto decorate(auto& thing) -> int;
+[[nodiscard]] auto decorate(auto& x) -> int;
 
 #line 16 "pure2-intro-example-hello-2022.cpp2"
 auto print_it(auto const& x, auto const& len) -> void;
@@ -28,22 +28,23 @@ auto print_it(auto const& x, auto const& len) -> void;
     std::vector<std::string> vec {
             "hello", "2022"}; 
 
-    for ( auto& str : vec ) {
+    for ( auto& str : cpp2::move(vec) ) {
         auto len {decorate(str)}; 
-        print_it(str, len);
+        print_it(str, cpp2::move(len));
     }
 }
 
 #line 11 "pure2-intro-example-hello-2022.cpp2"
-[[nodiscard]] auto decorate(auto& thing) -> int{
-    thing = "[" + thing + "]";
-    return CPP2_UFCS(ssize)(thing); 
+[[nodiscard]] auto decorate(auto& x) -> int{
+    x = "[" + x + "]";
+    return CPP2_UFCS(ssize)(x); 
 }
 
 #line 16 "pure2-intro-example-hello-2022.cpp2"
-auto print_it(auto const& x, auto const& len) -> void { 
+auto print_it(auto const& x, auto const& len) -> void{
     std::cout 
         << ">> " << x 
         << " - length " 
-        << len << "\n"; }
+        << len << "\n";
+}
 
