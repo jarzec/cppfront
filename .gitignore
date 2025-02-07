@@ -9,6 +9,7 @@
 *.tlog
 *.idb
 *.obj
+*.ifc
 *.pdb
 *.suo
 *.db
@@ -27,9 +28,15 @@
 *.exe
 source/gen_version.bat
 build*/
+venv/*
+*.ifc
 
 # Visual Studio cache directory
 .vs/
 
 # VSCode workspace directory
 .vscode/
+buildh2.bat
+gen_version.bat
+mkdocs_serve.sh
+experimental/a.out
