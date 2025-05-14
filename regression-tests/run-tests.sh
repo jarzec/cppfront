@@ -2,11 +2,37 @@
 
 ################
 usage() {
-    echo "Usage: $0 -c <compiler> [-t <tests to run>]"
+    echo "Usage: $0 -c <compiler> [-l <run label>] [-t <tests to run>]"
     echo "    -c <compiler>     The compiler to use for the test"
+    echo "    -s <cxx_std>      The C++ standard to compile with (e.g. 'c++20', 'c++2b', 'c++latest' depending on the compiler)"
+    echo "    -d <stdlib>       Clang-only: the C++ Standard Library to link with ('libstdc++', 'libc++', or 'default' for platform default)"
+    echo "    -l <run label>    The label to use in output patch file name"
     echo "    -t <tests to run> Runs only the provided, comma-separated tests (filenames including .cpp2)"
     echo "                      If the argument is not used all tests are run"
     exit 1
+}
+
+################
+# Check diff of the provided file using the given diff options
+# If the diff is not empty print it with the provided message
+report_diff () {
+    file="$1"
+    error_msg="$2"
+    patch_file="$3"
+    # The remaining arguments will be passed to git
+    shift 3
+    diff_opts="$@"
+
+    # Compare the content with the reference value checked in git
+    diff_output=$(git diff $diff_opts -- "$file")
+    if [[ -n "$diff_output" ]]; then
+        echo "            $error_msg:"
+        echo "                $file"
+        # $diff_output cannot be put directly in the format string
+        # Otherwise \ might be interpreted as an escape character
+        printf "\n%s\n\n" "$diff_output" | tee -a "$patch_file"
+        failure=1
+    fi
 }
 
 ################
@@ -26,37 +52,61 @@ check_file () {
     git ls-files --error-unmatch "$file" > /dev/null 2>&1
     untracked=$?
 
+    patch_file="${label}-${cxx_compiler}-${cxx_std}-${cxx_stdlib}.patch"
+
     if [[ $untracked -eq 1 ]]; then
-        echo "            The $description is not tracked by git:"
-        echo "                $file"
-        # Add the file to the index to be able to diff it...
-        git add "$file"
-        # ... print the diff ...
-        git --no-pager diff HEAD -- "$file" | tee -a "$cxx_compiler-patch.diff"
-        # ... and remove the file from the diff
-        git rm --cached -- "$file" > /dev/null 2>&1
-        
-        failure=1
+        # Untraced files are expected to be empty - report if they are not
+        if [[ -s ""$file"" ]]; then
+            # Add the file to the index to be able to diff it...
+            git add "$file"
+            # ... report the diff ...
+            report_diff "$file" \
+                "The $description is not tracked by git, it is expected to be empty" \
+                "$patch_file" \
+                "HEAD"
+            # ... and remove the file from the index
+            git rm --cached -- "$file" > /dev/null 2>&1
+        else
+            # The file is empty as expected - it can be removed
+            rm "$file"
+        fi
     else
         # Compare the content with the reference value checked in git
-        diff_output=$(git diff --ignore-cr-at-eol -- "$file")
-        if [[ -n "$diff_output" ]]; then
-            echo "            Non-matching $description:"
-            printf "\n$diff_output\n\n" | tee -a "$cxx_compiler-patch.diff"
+        # Lines includng Windows paths are excluded from diff
+        # This is necessary due to characters in those paths on GitHub runners
+        # that cause git diff to spuriously flag them
+        report_diff "$file" \
+            "Non-matching $description" \
+            "$patch_file" \
+            --ignore-cr-at-eol
+
+        # If the file is tracked an empty report an error
+        if [[ $failure != 1 && ! -s "$file" ]]; then
+            echo "            Empty tracked file:"
+            echo "                $file"
             failure=1
         fi
     fi
 }
 
-optstring="c:t:"
+optstring="c:s:d:l:t:"
 while getopts ${optstring} arg; do
   case "${arg}" in
     c)
         cxx_compiler="${OPTARG}"
         ;;
+    s)
+        cxx_std="${OPTARG}"
+        ;;
+    d)
+        cxx_stdlib="${OPTARG}"
+        ;;
+    l)
+        label="${OPTARG}"
+        ;;
     t)
         # Replace commas with spaces
-        chosen_tests=${OPTARG/,/ }
+        chosen_tests=${OPTARG//,/ }
         ;;
     \?)
         echo "Invalid option: -${OPTARG}."
@@ -80,7 +130,108 @@ if [ -z "$cxx_compiler" ]; then
     usage
 fi
 
-tests=$(ls | grep ".cpp2$")
+if [ -z "$label" ]; then
+    echo "Run label not specified"
+    usage
+fi
+
+################
+# Get the directory with the exec outputs and compilation command
+# We also allow each compiler configuration to specify any test files(s) to exclude from running.
+expected_results_dir="test-results"
+exclude_test_filter=""
+if [[ "$cxx_compiler" == *"cl.exe"* ]]; then
+    compiler_cmd="cl.exe -nologo -std:${cxx_std} -MD -EHsc -I ..\..\..\include -Fe:"
+    exec_out_dir="$expected_results_dir/msvc-2022-${cxx_std}"
+    compiler_version=$(cl.exe)
+else
+    # Verify the compiler command
+    which "$cxx_compiler" > /dev/null
+    if [[ $? != 0 ]]; then
+        printf "The compiler '$cxx_compiler' is not installed\n\n"
+        exit 2
+    fi
+
+    compiler_version=$("$cxx_compiler" --version)
+
+    if [[ "$compiler_version" == *"Apple clang version 14.0"* ||
+          "$compiler_version" == *"Homebrew clang version 15.0"* ]]; then
+        exec_out_dir="$expected_results_dir/apple-clang-14"
+        # We share the expected results dir for these two compilers, but there is one
+        # test which (as expected) fails to compile on both compilers, but has a slightly
+        # different error diagnostic because the clang path differs. So we exclude it from
+        # running. The alternative would be to duplicate the expected results files, which
+        # seems wasteful for just one test (that doesn't even compile).
+        exclude_test_filter="pure2-expected-is-as.cpp2"
+    elif [[ "$compiler_version" == *"Apple clang version 15.0"* ]]; then
+        exec_out_dir="$expected_results_dir/apple-clang-15"
+    elif [[ "$compiler_version" == *"clang version 12.0"* ]]; then 
+        exec_out_dir="$expected_results_dir/clang-12"
+    elif [[ "$compiler_version" == *"clang version 15.0"* ]]; then 
+        exec_out_dir="$expected_results_dir/clang-15"
+    elif [[ "$compiler_version" == *"clang version 19.1"* ]]; then 
+        exec_out_dir="$expected_results_dir/clang-19"
+    elif [[ "$compiler_version" == *"g++-10"* ]]; then
+        exec_out_dir="$expected_results_dir/gcc-10"
+    elif [[ "$compiler_version" == *"g++-12"* ||
+            "$compiler_version" == *"g++-13"*
+         ]]; then
+        exec_out_dir="$expected_results_dir/gcc-13"
+    elif [[ "$compiler_version" == *"g++-14"* ]]; then
+        exec_out_dir="$expected_results_dir/gcc-14"
+    else
+        printf "Unhandled compiler version:\n$compiler_version\n\n"
+        exit 2
+    fi
+
+    # Append the C++ standard (e.g. 'c++20') to the expected output dir name
+    exec_out_dir="${exec_out_dir}-${cxx_std}"
+
+    # Clang can link with either libstdc++ or libc++
+    # By default clang on ubuntu links with libstdc++ and on macOS links with libc++.
+    if [[ "$compiler_version" == *"clang"* ]]; then 
+        if [[ "$cxx_stdlib" == "default" || "$cxx_stdlib" == "" ]]; then
+            cxx_stdlib_link_arg=""  # Use compiler/platform default
+        elif [[ "$cxx_stdlib" == "libstdc++" ]]; then
+            cxx_stdlib_link_arg="-stdlib=libstdc++"
+        elif [[ "$cxx_stdlib" == *"libc++"* ]]; then
+
+            # Need to install the correct libc++ packages, e.g. `libc++-15-dev` and `libc++abi-15-dev` for clang 15.
+            # Our `cxx_stdlib` variable contains the `libc++-XX-dev` package name so we need to create the abi version.
+            cxx_stdlib_abi_package="${cxx_stdlib/libc++/libc++abi}"
+            printf "Installing packages: $cxx_stdlib $cxx_stdlib_abi_package\n\n"
+            sudo apt-get install -y $cxx_stdlib $cxx_stdlib_abi_package
+
+            cxx_stdlib_link_arg="-stdlib=libc++"
+            exec_out_dir="${exec_out_dir}-libcpp"
+        else
+            printf "Unhandled C++ Standard Library option:\n$cxx_stdlib\n\n"
+            exit 2
+        fi
+    else
+        cxx_stdlib_link_arg=""  # Use compiler/platform default
+    fi
+
+    compiler_cmd="$cxx_compiler -I../../../include -std=$cxx_std $cxx_stdlib_link_arg -pthread -o "
+    printf "\ncompiler_cmd: $compiler_cmd\n\n"
+fi
+
+if [[ -d "$exec_out_dir" ]]; then
+    printf "Full compiler version for '$cxx_compiler':\n$compiler_version\n\n"
+
+    printf "Directory with reference compilation/execution files to use:\n$exec_out_dir\n\n"
+else
+    printf "Directory with reference compilation/execution files not found for compiler: '$cxx_compiler' at $exec_out_dir\n\n"
+    exit 2
+fi
+
+################
+# Get the list of .cpp2 test files
+if [[ -n "$exclude_test_filter" ]]; then
+    tests=$(ls | grep ".cpp2$" | grep -v $exclude_test_filter)
+else
+    tests=$(ls | grep ".cpp2$")
+fi
 if [[ -n "$chosen_tests" ]]; then
     for test in $chosen_tests; do
         if ! [[ -f "$test" ]]; then
@@ -98,43 +249,6 @@ else
     printf "Performing all regression tests\n\n"
 fi
 
-expected_results_dir="test-results"
-
-################
-# Get the directory with the exec outputs and compilation command
-if [[ "$cxx_compiler" == *"cl.exe"* ]]; then
-    compiler_cmd='cl.exe -nologo -std:c++latest -MD -EHsc -I ..\include -I ..\..\..\include -experimental:module -Fe:'
-    exec_out_dir="$expected_results_dir/msvc-2022"
-    compiler_version=$(cl.exe)
-else
-    compiler_cmd="$cxx_compiler -I../include -I../../../include -std=c++20 -pthread -o "
-    
-    compiler_ver=$("$cxx_compiler" --version)
-    if [[ "$compiler_ver" == *"Apple clang version 14.0"* ]]; then
-        exec_out_dir="$expected_results_dir/apple-clang-14"
-    elif [[ "$compiler_ver" == *"clang version 12.0"* ]]; then 
-        exec_out_dir="$expected_results_dir/clang-12"
-    elif [[ "$compiler_ver" == *"clang version 15.0"* ]]; then 
-        exec_out_dir="$expected_results_dir/clang-15"
-    elif [[ "$compiler_ver" == *"g++-10"* ]]; then
-        exec_out_dir="$expected_results_dir/gcc-10"
-    elif [[ "$compiler_ver" == *"g++-12"* ||
-            "$compiler_ver" == *"g++-13"*
-         ]]; then
-        exec_out_dir="$expected_results_dir/gcc-13"
-    fi
-
-    compiler_version=$("$cxx_compiler" --version)
-fi
-
-if [[ -d "$exec_out_dir" ]]; then
-    printf "Full compiler version for '$cxx_compiler':\n$compiler_version\n\n"
-
-    printf "Directory with reference compilation/execution files to use:\n$exec_out_dir\n\n"
-else
-    printf "not found for compiler: '$cxx_compiler'\n\n"
-fi
-
 ################
 cppfront_cmd="cppfront.exe"
 echo "Building cppfront"
@@ -145,13 +259,25 @@ if [[ $? -ne 0 ]]; then
 fi
 
 ################
+# Build the `std` and `std.compat` modules so that the regression tests can use them (currently only supported by MSVC)
+# in order to support `import std.compat;`.
+regression_test_link_obj=""
+if [[ "$cxx_compiler" == *"cl.exe"* ]]; then
+    echo "Building std and std.compat modules"
+    (cd $exec_out_dir; \
+     cl.exe -nologo -std:${cxx_std} -MD -EHsc -c "${VCToolsInstallDir}/modules/std.ixx";
+     cl.exe -nologo -std:${cxx_std} -MD -EHsc -c "${VCToolsInstallDir}/modules/std.compat.ixx")
+    regression_test_link_obj="std.obj std.compat.obj"
+fi
+
+################
 failed_tests=()
 failed_compilations=()
 skipped_tests=()
 echo "Running regression tests"
 for test_file in $tests; do
     test_name=${test_file%.*}
-    expeced_output="$expected_results_dir/$test_file.output"
+    expected_output="$expected_results_dir/$test_file.output"
     generated_cpp_name=$test_name.cpp
     expected_src="$expected_results_dir/$generated_cpp_name"
     test_bin="test.exe"
@@ -169,13 +295,13 @@ for test_file in $tests; do
     ########
     # Run the translation test
     echo "        Generating Cpp1 code"
-    ./"$cppfront_cmd" "$test_file" -o "$expected_src" $opt > "$expeced_output" 2>&1
+    ./"$cppfront_cmd" "$test_file" -o "$expected_src" $opt > "$expected_output" 2>&1
 
     failure=0
     compiler_issue=0
     ########
     # The C++1 generation output has to exist and to be tracked by git
-    check_file "$expeced_output" "Cpp1 generation output file"
+    check_file "$expected_output" "Cpp1 generation output file"
 
     ########
     # Check the generated code
@@ -195,7 +321,7 @@ for test_file in $tests; do
         # The source is temporarily copied to avoid issues with bash paths in cl.exe
         (cd $exec_out_dir; \
          cp ../../$expected_src $generated_cpp_name;
-         $compiler_cmd"$test_bin" \
+         $compiler_cmd"$test_bin" $regression_test_link_obj \
                         $generated_cpp_name \
                         > $generated_cpp_name.output 2>&1)
         compilation_result=$?
@@ -234,7 +360,7 @@ for test_file in $tests; do
                 fi
             fi
         fi
-    elif [[ $(cat "$expeced_output") != *"error"* ]]; then
+    elif [[ $(cat "$expected_output") != *"error"* ]]; then
          echo "            Missing generated src file treated as failure"
          echo "                Failing compilation message needs to contain 'error'"
          failure=1
