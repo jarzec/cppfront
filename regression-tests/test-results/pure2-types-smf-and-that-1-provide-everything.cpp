@@ -31,9 +31,9 @@ class myclass {
     public: auto operator=(myclass&& that) noexcept -> myclass& ;
 
 #line 22 "pure2-types-smf-and-that-1-provide-everything.cpp2"
-    public: explicit myclass(cpp2::in<std::string> x);
+    public: myclass(cpp2::impl::in<std::string> x);
 #line 22 "pure2-types-smf-and-that-1-provide-everything.cpp2"
-    public: auto operator=(cpp2::in<std::string> x) -> myclass& ;
+    public: auto operator=(cpp2::impl::in<std::string> x) -> myclass& ;
 
 #line 27 "pure2-types-smf-and-that-1-provide-everything.cpp2"
     private: std::string name {"Henry"}; 
@@ -41,11 +41,11 @@ class myclass {
 
     public: auto print(
 
-        cpp2::in<std::string_view> prefix, 
-        cpp2::in<std::string_view> suffix
+        cpp2::impl::in<std::string_view> prefix, 
+        cpp2::impl::in<std::string_view> suffix
         ) const& -> void;
 
-#line 37 "pure2-types-smf-and-that-1-provide-everything.cpp2"
+#line 39 "pure2-types-smf-and-that-1-provide-everything.cpp2"
 };
 
 auto main() -> int;
@@ -64,7 +64,7 @@ auto main() -> int;
 
 #line 8 "pure2-types-smf-and-that-1-provide-everything.cpp2"
     myclass::myclass(myclass&& that) noexcept
-        : name{ std::move(that).name + "(CM)" }
+        : name{ cpp2::move(that).name + "(CM)" }
         , addr{ std::move(that).addr }{
 
 #line 10 "pure2-types-smf-and-that-1-provide-everything.cpp2"
@@ -93,14 +93,14 @@ auto main() -> int;
     }
 
 #line 22 "pure2-types-smf-and-that-1-provide-everything.cpp2"
-    myclass::myclass(cpp2::in<std::string> x)
+    myclass::myclass(cpp2::impl::in<std::string> x)
         : name{ x }{
 
 #line 24 "pure2-types-smf-and-that-1-provide-everything.cpp2"
         std::cout << "ctor - from string   ";
     }
 #line 22 "pure2-types-smf-and-that-1-provide-everything.cpp2"
-    auto myclass::operator=(cpp2::in<std::string> x) -> myclass& {
+    auto myclass::operator=(cpp2::impl::in<std::string> x) -> myclass& {
         name = x;
         addr = "123 Ford Dr.";
 
@@ -113,12 +113,14 @@ auto main() -> int;
 #line 30 "pure2-types-smf-and-that-1-provide-everything.cpp2"
     auto myclass::print(
 
-        cpp2::in<std::string_view> prefix, 
-        cpp2::in<std::string_view> suffix
-        ) const& -> void { 
-    std::cout << prefix << ("[ " + cpp2::to_string(name) + " | " + cpp2::to_string(addr) + " ]") << suffix;  }
+        cpp2::impl::in<std::string_view> prefix, 
+        cpp2::impl::in<std::string_view> suffix
+        ) const& -> void
+    {
+        std::cout << prefix << "[ " + cpp2::to_string(name) + " | " + cpp2::to_string(addr) + " ]" << suffix;
+    }
 
-#line 39 "pure2-types-smf-and-that-1-provide-everything.cpp2"
+#line 41 "pure2-types-smf-and-that-1-provide-everything.cpp2"
 auto main() -> int{
     std::cout << "Function invoked        Call syntax   Results\n";
     std::cout << "----------------------  ------------  ------------------------------------------------------\n";
@@ -134,14 +136,14 @@ auto main() -> int{
 
     auto z {std::move(x)}; 
     CPP2_UFCS(print)(z, "   mv-construct  ", " <- ");
-    CPP2_UFCS(print)(std::move(x), "", "\n");
+    CPP2_UFCS(print)(cpp2::move(x), "", "\n");
 
     z = y;
     CPP2_UFCS(print)(z, "   cp-assign     ", " <- ");
     CPP2_UFCS(print)(y, "", "\n");
 
     z = { std::move(y) };
-    CPP2_UFCS(print)(std::move(z), "   mv-assign     ", " <- ");
-    CPP2_UFCS(print)(std::move(y), "", "\n");
+    CPP2_UFCS(print)(cpp2::move(z), "   mv-assign     ", " <- ");
+    CPP2_UFCS(print)(cpp2::move(y), "", "\n");
 }
 

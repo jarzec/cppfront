@@ -1,3 +1,5 @@
+#include <string>
+#include <iostream>
 
 
 //=== Cpp2 type declarations ====================================================
@@ -11,8 +13,7 @@
 //=== Cpp2 type definitions and function declarations ===========================
 
 #line 1 "mixed-ufcs-multiple-template-arguments.cpp2"
-#include <string>
-#include <iostream>
+#line 3 "mixed-ufcs-multiple-template-arguments.cpp2"
 
 template <auto from, auto to>
 auto substr(const std::string& input) -> std::string {
@@ -40,7 +41,7 @@ struct X {
     std::string test_string {"The rain in Spain flows mainly down the drain"}; 
     std::cout << substr<4,8>(test_string) << "\n";
 
-    X x {std::move(test_string)}; 
-    std::cout << CPP2_UFCS_TEMPLATE(substr<4,8>)(std::move(x)) << "\n";
+    X x {cpp2::move(test_string)}; 
+    std::cout << CPP2_UFCS_TEMPLATE(substr<4,8>)(cpp2::move(x)) << "\n";
 }
 

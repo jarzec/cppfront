@@ -27,7 +27,7 @@ class t {
 [[nodiscard]] auto main() -> int;
 
 #line 14 "pure2-bugfix-for-unbraced-function-expression.cpp2"
-auto inline constexpr x = cpp2::i32{0};
+auto inline constexpr x{ cpp2::i32{0} };
 extern cpp2::i32 y;
 
 //=== Cpp2 function definitions =================================================
@@ -42,16 +42,16 @@ extern cpp2::i32 y;
 {
 auto const& x{t()};
 #line 6 "pure2-bugfix-for-unbraced-function-expression.cpp2"
-  {CPP2_ASSERT_IN_BOUNDS(x, []() mutable -> auto { return 0;  }); }
+  {CPP2_ASSERT_IN_BOUNDS(x, []() -> auto { return 0;  }); }
 }
 {
 auto const& x{t()};
 #line 7 "pure2-bugfix-for-unbraced-function-expression.cpp2"
-  {CPP2_ASSERT_IN_BOUNDS(x, []() mutable -> auto { return 0;  }); }
+  {CPP2_ASSERT_IN_BOUNDS(x, []() -> auto { return 0;  }); }
 }
 
 #line 9 "pure2-bugfix-for-unbraced-function-expression.cpp2"
-  if (cpp2::Default.has_handler() && !(!((cpp2::is<int>([]() mutable -> auto { return 0; })))) ) { cpp2::Default.report_violation(""); }
+  if (cpp2::cpp2_default.is_active() && !(!((cpp2::impl::is<int>([]() -> decltype(auto) { return 0; })))) ) { cpp2::cpp2_default.report_violation(""); }
 
   return cpp2::i32{0}; 
 }

@@ -1,26 +1,38 @@
 
-//  Copyright (c) Herb Sutter
-//  SPDX-License-Identifier: CC-BY-NC-ND-4.0
-
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
+//  Copyright 2022-2024 Herb Sutter
+//  SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//  
+//  Part of the Cppfront Project, under the Apache License v2.0 with LLVM Exceptions.
+//  See https://github.com/hsutter/cppfront/blob/main/LICENSE for license information.
 
 
 //  We want cppfront to build cleanly at very high warning levels, with warnings
 //  as errors -- so disable a handful that fire incorrectly due to compiler bugs
 #ifdef _MSC_VER
-    #pragma warning(disable: 4456)
+    #pragma warning(disable: 4456 4706)
 #endif
 #if defined(__GNUC__) && __GNUC__ >= 13 && !defined(__clang_major__)
     #pragma GCC diagnostic ignored "-Wdangling-reference"
 #endif
 
+//  Disable some clang conversion warnings:
+//      cppfront uses signed integer types for indices and container sizes.
+//  Note: We don't pop the diagnostic because we want them disabled in the
+//  entire cppfront translation unit.
+#ifdef __clang__
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wsign-conversion"
+#endif
+
 #include "cpp2util.h"
+
+
+//===========================================================================
+//  When defined, builds cppfront in an instrumented (and slower) mode that
+//  prints more information under -_debug
+//===========================================================================
+
+//#define CPP2_DEBUG_BUILD
 
 
 //===========================================================================
@@ -30,15 +42,10 @@
 #ifndef CPP2_COMMON_H
 #define CPP2_COMMON_H
 
-#include <string>
-#include <string_view>
-#include <vector>
-#include <cstdint>
-#include <cctype>
 #include <cassert>
+#include <cctype>
+#include <chrono>
 #include <iomanip>
-#include <compare>
-#include <algorithm>
 #include <unordered_map>
 
 namespace cpp2 {
@@ -53,7 +60,7 @@ struct source_line
 {
     std::string text;
 
-    enum class category { empty, preprocessor, comment, import, cpp1, cpp2, rawstring };
+    enum class category : u8 { empty, preprocessor, comment, import, cpp1, cpp2, rawstring, preprocessor_was_emitted };
     category cat;
 
     bool all_tokens_are_densely_spaced = true; // to be overridden in lexing if they're not
@@ -70,7 +77,7 @@ struct source_line
         -> int
     {
         return
-            unsafe_narrow<int>(std::find_if_not( text.begin(), text.end(), &isspace )
+            unchecked_narrow<int>(std::find_if_not( text.begin(), text.end(), &isspace )
                                - text.begin());
     }
 
@@ -85,7 +92,7 @@ struct source_line
         break;case category::cpp1:          return "/* 1 */ ";
         break;case category::cpp2:          return "/* 2 */ ";
         break;case category::rawstring:     return "/* R */ ";
-        break;default: assert(!"illegal category"); abort();
+        break;default: assert(false && "ICE: illegal category"); abort();
         }
     }
 };
@@ -93,6 +100,7 @@ struct source_line
 
 using lineno_t = int32_t;
 using colno_t  = int32_t;   // not int16_t... encountered >80,000 char line during testing
+using index_t  = int32_t;
 
 struct source_position
 {
@@ -115,7 +123,7 @@ struct source_position
 
 struct comment
 {
-    enum class comment_kind { line_comment = 0, stream_comment };
+    enum class comment_kind : u8 { line_comment = 0, stream_comment };
 
     comment_kind    kind;
     source_position start;
@@ -128,11 +136,11 @@ struct comment
 struct string_parts {
     struct cpp_code   { std::string text; };
     struct raw_string { std::string text; };
-    enum adds_sequences { no_ends = 0, on_the_beginning = 1, on_the_end = 2, on_both_ends = 3 };
+    enum adds_sequences : u8 { no_ends = 0, on_the_beginning = 1, on_the_end = 2, on_both_ends = 3 };
 
     string_parts(const std::string& beginseq,
                  const std::string& endseq,
-                 adds_sequences     strateg) 
+                 adds_sequences     strateg)
      : begin_seq{beginseq}
      , end_seq{endseq}
      , strategy{strateg}
@@ -148,17 +156,19 @@ struct string_parts {
 
     void clear() { parts.clear(); }
 
+    auto empty() const { return parts.empty(); }
+
     auto generate() const -> std::string
-    {        
-        if (parts.empty()) { 
-            return (strategy & on_the_beginning ? begin_seq : std::string{}) 
-                 + (strategy & on_the_end ? end_seq : std::string{}); 
+    {
+        if (parts.empty()) {
+            return (strategy & on_the_beginning ? begin_seq : std::string{})
+                 + (strategy & on_the_end ? end_seq : std::string{});
         }
 
-        auto result = std::visit(begin_visit{begin_seq, strategy}, 
+        auto result = std::visit(begin_visit{begin_seq, strategy},
                                  parts.front());
 
-        if (std::ssize(parts) > 1) { 
+        if (std::ssize(parts) > 1) {
             auto it1 = parts.cbegin();
             auto it2 = parts.cbegin()+1;
             for(;it2 != parts.cend(); ++it1, ++it2) {
@@ -247,44 +257,6 @@ struct multiline_raw_string
 {
     std::string     text;
     source_position end = {0, 0};
-};
-
-//-----------------------------------------------------------------------
-//
-//  error: represents a user-readable error message
-//
-//-----------------------------------------------------------------------
-//
-struct error_entry
-{
-    source_position where;
-    std::string     msg;
-    bool            internal = false;
-    bool            fallback = false;   // only emit this message if there was nothing better
-
-    error_entry(
-        source_position  w,
-        std::string_view m,
-        bool             i = false,
-        bool             f = false
-    )
-        : where{w}
-        , msg{m}
-        , internal{i}
-        , fallback{f}
-    { }
-
-    auto operator==(error_entry const& that)
-        -> bool
-    {
-        return
-            where == that.where
-            && msg == that.msg
-            ;
-    }
-
-    auto print(auto& o, std::string const& file) const
-        -> void;
 };
 
 
@@ -400,6 +372,46 @@ auto is_separator_or(auto pred, char c)
 }
 
 
+auto peek(
+    std::string_view line,
+    int i,
+    int num
+    )
+{
+    return
+        (i + num < std::ssize(line) && i + num >= 0)
+        ? line[i + num]
+        : '\0';
+}
+
+
+//G encoding-prefix: one of
+//G     'u8' 'u' 'uR' 'u8R' 'U' 'UR' 'L' 'LR' 'R'
+//G
+auto is_encoding_prefix_and(std::string_view line, int i, char next) {
+    auto peek1 = peek(line, i, 1);
+    auto peek2 = peek(line, i, 2);
+    auto peek3 = peek(line, i, 3);
+    if (line[i] == next) { return 1; } // "
+    else if (line[i] == 'u') {
+        if (peek1 == next) { return 2; } // u"
+        else if (peek1 == '8' && peek2 == next) { return 3; } // u8"
+        else if (peek1 == 'R' && peek2 == next) { return 3; } // uR"
+        else if (peek1 == '8' && peek2 == 'R' && peek3 == next) { return 4; } // u8R"
+    }
+    else if (line[i] == 'U') {
+        if (peek1 == next) { return 2; } // U"
+        else if (peek1 == 'R' && peek2 == next) { return 3; } // UR"
+    }
+    else if (line[i] == 'L') {
+        if (peek1 == next) { return 2; } // L"
+        else if (peek1 == 'R' && peek2 == next) { return 3; } // LR"
+    }
+    else if (line[i] == 'R' && peek1 == next) { return 2; } // R"
+    return 0;
+}
+
+
 //  Bool to string
 //
 template<typename T>
@@ -437,6 +449,27 @@ auto strip_path(std::string const& file)
     }
     return {file, _as<size_t>(i+1)};
 }
+
+
+//-----------------------------------------------------------------------
+//
+//  String: A helper workaround for passing a string literal as a
+//  template argument
+//
+//-----------------------------------------------------------------------
+//
+template<std::size_t N>
+struct String
+{
+    constexpr String(const char (&str)[N])
+    {
+        std::copy_n(str, N, value);
+    }
+
+    auto operator<=>(String const&) const = default;
+
+    char value[N] = {};
+};
 
 
 //-----------------------------------------------------------------------
@@ -531,12 +564,25 @@ auto contains(
 }
 
 
-//  In keep trying to write string+string_view, and it ought to Just Work without
-//  the current workarounds. Not having that is a minor impediment to using safe
-//  and efficient string_views, which we should be encouraging. So for my own use
-//  and to remove that minor impediment to writing safe and efficient code, I'm
-//  just going to add this until we get P2591 in C++26(?) -- See: wg21.link/p2591
-//
+//  Print an integer with 1,000's separators (always commas, not locale-driven)
+template <typename T>
+    requires std::is_integral_v<T>  // Note: `std::integral` concept not yet available in Apple Clang
+auto print_with_thousands(T val)
+    -> std::string
+{
+    auto ret = std::to_string(val % 10);
+    auto pos = 0;
+    while ((val /= 10) > 0) {
+        if ((++pos % 3) == 0) { ret = ',' + ret; }
+        ret = std::to_string(val % 10) + ret;
+    }
+    return ret;
+}
+
+
+//  Provide string+string_view if P2591 is not available.
+// 
+#if __cpp_lib_string_view < 202403L
 template<class charT, class traits, class Allocator>
 [[nodiscard]] constexpr auto operator+(
     std::basic_string<charT, traits, Allocator> lhs,
@@ -556,6 +602,7 @@ template<class charT, class traits, class Allocator>
 {
     return rhs.insert(0, lhs);
 }
+#endif
 
 
 //-----------------------------------------------------------------------
@@ -594,22 +641,58 @@ class cmdline_processor
         flag(int g, std::string_view n, std::string_view d, callback0 h0, callback1 h1, std::string_view s, bool o)
             : group{g}, name{n}, description{d}, handler0{h0}, handler1{h1}, synonym{s}, opt_out{o}
         { }
+
+        auto get_name(bool indicate_short_name = false) const {
+            auto n = name.substr(0, unique_prefix);
+            if (unique_prefix < std::ssize(name)) {
+                auto name_length = _as<int>(std::min(name.find(' '), name.size()));
+                if (indicate_short_name) {
+                    n += "[";
+                }
+                n += name.substr(unique_prefix, name_length - unique_prefix);
+                if (indicate_short_name) {
+                    n += "]";
+                }
+                n += name.substr(name_length);
+            }
+            return n;
+        }
     };
     std::vector<flag> flags;
     int max_flag_length = 0;
 
     std::unordered_map<int, std::string> labels = {
-        { 2, "Additional dynamic safety checks and contract information" },
+        { 2, "Additional dynamic safety check controls" },
         { 4, "Support for constrained target environments" },
-        { 9, "Other options" }
+        { 8, "Cpp1 file content options" },
+        { 9, "Cppfront output options" }
     };
 
-    //  Define this in the main .cpp to avoid bringing <iostream> into the headers,
-    //  so that we can't accidentally start depending on iostreams in the compiler body
-    static auto print(std::string_view, int width = 0)
-        -> void;
+    static auto print(std::string_view s, int width = 0)
+        -> void
+    {
+        if (width > 0) {
+            std::cout << std::setw(width) << std::left;
+        }
+        std::cout << s;
+    }
 
 public:
+    auto flags_starting_with(
+        std::string_view s, 
+        bool             indicate_short_name = true
+    )
+        -> std::vector<std::string>
+    {
+        auto ret = std::vector<std::string>{};
+        for (auto const& flag : flags) {
+            if (flag.name.starts_with(s)) {
+                ret.push_back( flag.get_name(indicate_short_name) );
+            }
+        }
+        return ret;
+    }
+
     auto process_flags()
         -> void
     {
@@ -686,6 +769,7 @@ public:
                             if (arg+1 == args.end()) {
                                 print("Missing argument to option " + arg->text + " (try -help)\n");
                                 help_requested = true;
+                                break;
                             }
                             arg->pos = processed;
                             ++arg;  // move to next argument, which is the argument to this switch
@@ -713,7 +797,9 @@ public:
             [](auto& a, auto& b){ return a.group < b.group || (a.group == b.group && a.name < b.name); }
         );
 
-        print("\nUsage: cppfront [options] file ...\n\nOptions:\n");
+        print("\nUsage: cppfront [options] file ...\n");
+        print("\n  file                    source file(s) (can be 'stdin')\n");
+        print("\nOptions: \n");
         int last_group = -1;
         for (auto& flag : flags) {
             //  Skip hidden flags
@@ -729,14 +815,7 @@ public:
                 }
             }
             print("  -");
-            auto n = flag.name.substr(0, flag.unique_prefix);
-            if (flag.unique_prefix < std::ssize(flag.name)) {
-                auto name_length = _as<int>(std::min(flag.name.find(' '), flag.name.size()));
-                n += "[";
-                n += flag.name.substr(flag.unique_prefix, name_length - flag.unique_prefix);
-                n += "]";
-                n += flag.name.substr(name_length);
-            }
+            auto n = flag.get_name(true);
             if (flag.opt_out) {
                 n += "[-]";
             }
@@ -764,7 +843,7 @@ public:
         auto length = std::ssize(name);
         if (opt_out) { length += 3; }   // space to print "[-]"
         if (max_flag_length < length) {
-            max_flag_length = unsafe_narrow<int>(length);
+            max_flag_length = unchecked_narrow<int>(length);
         }
     }
     struct register_flag {
@@ -804,15 +883,17 @@ public:
 
     //  This is used only by the owner of the 'main' branch
     //  to generate stable build version strings
-    auto gen_version()
+    auto gen_build()
         -> void
     {
         help_requested = true;
-        std::string_view a = __DATE__;
-        std::string_view b = __TIME__;
+        constexpr std::string_view a = __DATE__;
+        constexpr std::string_view b = __TIME__;
         std::unordered_map<std::string_view, char> m = { {"Jan",'1'}, {"Feb",'2'}, {"Mar",'3'}, {"Apr",'4'}, {"May",'5'}, {"Jun",'6'}, {"Jul",'7'}, {"Aug",'8'}, {"Sep",'9'}, {"Oct",'A'}, {"Nov",'B'}, {"Dec",'C'} };
 
-        auto stamp = std::to_string(atoi(&a[9])-15);
+        auto y = atoi(&a[9])-15;
+        auto stamp = std::string();
+        stamp += y<10 ? char('0'+y) : char('A'+y-10);
         stamp += m[a.substr(0, 3)];
         stamp += a.substr(4,2);
         stamp += ":";
@@ -828,16 +909,11 @@ public:
         help_requested = true;
         print("\ncppfront compiler "
             #include "version.info"
-        "   Build "
+        " Build "
             #include "build.info"
         );
-        print("\nCopyright(c) Herb Sutter   All rights reserved\n");
-        print("\nSPDX-License-Identifier: CC-BY-NC-ND-4.0");
-        print("\n  No commercial use");
-        print("\n  No forks/derivatives");
-        print("\n  Note: This license emphasizes that this is a personal");
-        print("\n        experiment; it will be upgraded if that changes\n");
-        print("\nAbsolutely no warranty - try at your own risk\n");
+        print("\nSPDX-License-Identifier  Apache-2.0 WITH LLVM-exception");
+        print("\nCopyright (c) 2022-2024  Herb Sutter\n");
     }
 
 } cmdline;
@@ -871,20 +947,269 @@ static cmdline_processor::register_flag cmd_version(
     []{ cmdline.print_version(); }
 );
 
-static cmdline_processor::register_flag cmd_gen_version(
+static cmdline_processor::register_flag cmd_gen_build(
     0,
-    "_gen_version",
-    "Generate version information",
-    []{ cmdline.gen_version(); }
+    "_gen_build",
+    "Generate build information",
+    []{ cmdline.gen_build(); }
+);
+
+static auto flag_verbose = false;
+static cmdline_processor::register_flag cmd_verbose(
+    9,
+    "verbose",
+    "Print verbose output and statistics",
+    []{ flag_verbose = true; }
 );
 
 static auto flag_internal_debug = false;
 static cmdline_processor::register_flag cmd_internal_debug(
     0,
     "_debug",
-    "Generate internal debug instrumentation",
-    []{ flag_internal_debug = true; }
+    "Generate internal debug data, implies -verbose",
+    []{ flag_internal_debug = true; flag_verbose = true; }
 );
+
+static auto flag_print_colon_errors = false;
+static cmdline_processor::register_flag cmd_print_colon_errors(
+    9,
+    "format-colon-errors",
+    "Emit ':line:col:' format for messages - lights up some tools",
+    []{ flag_print_colon_errors = true; }
+);
+
+
+//-----------------------------------------------------------------------
+//
+//  error: represents a user-readable error message
+//
+//-----------------------------------------------------------------------
+//
+struct error_entry
+{
+    source_position where;
+    std::string     msg;
+    bool            internal = false;
+    bool            fallback = false;   // only emit this message if there was nothing better
+
+    error_entry(
+        source_position  w,
+        std::string_view m,
+        bool             i = false,
+        bool             f = false
+    )
+        : where{w}
+        , msg{m}
+        , internal{i}
+        , fallback{f}
+    { }
+
+    auto operator==(error_entry const& that)
+        -> bool
+    {
+        return
+            where == that.where
+            && msg == that.msg
+            ;
+    }
+
+    auto print(auto& o, std::string const& file) const
+        -> void
+    {
+        o << file ;
+        if (where.lineno > 0) {
+            if (flag_print_colon_errors) {
+                o << ":" << (where.lineno);
+                if (where.colno >= 0) {
+                    o << ":" << where.colno;
+                }
+            }
+            else {
+                o << "("<< (where.lineno);
+                if (where.colno >= 0) {
+                    o << "," << where.colno;
+                }
+                o  << ")";
+            }
+        }
+        o << ":";
+        if (internal) {
+            o << " internal compiler";
+        }
+        o << " error: " << msg << "\n";
+    }
+
+};
+
+
+//-----------------------------------------------------------------------
+//
+//  stable_vector: a simple segmented vector with limited interface
+//                 that doesn't invalidate by moving memory
+//
+//-----------------------------------------------------------------------
+//
+template <typename T>
+class stable_vector
+{
+    static constexpr size_t PageSize = 1'000;
+
+    std::vector< std::vector<T> > data;
+
+    auto add_segment( std::initializer_list<T> init = {} ) -> void {
+        data.push_back( init );
+        data.back().reserve(PageSize);
+    }
+
+public:
+    stable_vector( std::initializer_list<T> init = {}) {
+        add_segment( init);
+    }
+
+    auto empty() const -> bool {
+        return data.size() == 1 && data.back().empty();
+    }
+
+    auto size() const -> size_t {
+        testing.enforce(!data.empty());
+        return (data.size() - 1) * PageSize + data.back().size();
+    }
+
+    auto ssize() const -> ptrdiff_t {
+        return unchecked_narrow<ptrdiff_t>(size());
+    }
+
+    auto operator[](size_t idx) -> T& {
+        bounds_safety.enforce(idx < size());
+        return data[idx / PageSize][idx % PageSize];
+    }
+
+    auto operator[](size_t idx) const -> T const& {
+        bounds_safety.enforce(idx < size());
+        return data[idx / PageSize][idx % PageSize];
+    }
+
+    auto back() -> T& {
+        return data.back().back();
+    }
+
+    auto push_back(T const& t) -> void {
+        if (data.back().size() == data.back().capacity()) {
+            add_segment();
+        }
+        data.back().push_back(t);
+    }
+
+    template< class... Args >
+    auto emplace_back( Args&&... args ) -> T& {
+        if (data.back().size() == data.back().capacity()) {
+            add_segment();
+        }
+        return data.back().emplace_back(CPP2_FORWARD(args)...);
+    }
+
+    auto pop_back() -> void {
+        bounds_safety.enforce(size() > 0);
+        if (
+            data.back().empty()
+            && data.size() > 1
+            )
+        {
+            data.pop_back();
+        }
+        data.back().pop_back();
+    }
+
+    //-------------------------------------------------------------------
+    //  Debug interface
+    //
+    auto debug_print(std::ostream& o) const
+        -> void
+    {
+        o << "stable_vector:\n";
+        for (auto i = 0; auto& chunk : data) {
+            o << "  -- page " << i++ << " --\n    ";
+            for (auto e : chunk) {
+                o << e << ' ';
+            }
+            o << "\n";
+        }
+    }
+
+    //-------------------------------------------------------------------
+    //  Iterator interface
+    //
+    class iterator {
+        stable_vector* v;
+        size_t         pos = 0;
+    public:
+        using value_type        = T;
+        using difference_type   = std::ptrdiff_t;
+        using pointer           = T*;
+        using reference         = T&;
+        using iterator_category = std::random_access_iterator_tag;
+
+        iterator( stable_vector* v_ = nullptr, size_t pos_ = 0) : v{v_}, pos{pos_} { }
+        auto operator++ ()           -> iterator { if (pos < v->size()) { ++pos; } return *this; }
+        auto operator-- ()           -> iterator { if (pos > 0        ) { --pos; } return *this; }
+        auto operator+= (size_t off) -> iterator { if (pos + off < v->size()) { pos += off; } else { pos = v->size(); } return *this; }
+        auto operator-= (size_t off) -> iterator { if (pos - off > 0        ) { pos -= off; } else { pos = 0;         } return *this; }
+        auto operator*  () const     -> T&       { return  (*v)[pos      ]; }
+        auto operator-> () const     -> T*       { return &(*v)[pos      ]; }
+        auto operator[] (size_t off) -> T&       { return  (*v)[pos + off]; }
+        auto operator+  (size_t off) -> iterator { auto i = *this; i += off; return i; }
+        auto operator-  (size_t off) -> iterator { auto i = *this; i -= off; return i; }
+        auto operator-  (iterator const& that)   -> ptrdiff_t { return pos - that.pos; }
+        auto operator<=>(iterator const&) const  -> std::strong_ordering = default;
+    };
+
+    class const_iterator {
+        stable_vector const* v;
+        size_t               pos = 0;
+    public:
+        using value_type        = const T;
+        using difference_type   = std::ptrdiff_t;
+        using pointer           = T const*;
+        using reference         = T const&;
+        using iterator_category = std::random_access_iterator_tag;
+
+        const_iterator( stable_vector const* v_ = nullptr, size_t pos_ = 0) : v{v_}, pos{pos_} { }
+        auto operator++ ()           -> const_iterator { if (pos < v->size()) { ++pos; } return *this; }
+        auto operator-- ()           -> const_iterator { if (pos > 0        ) { --pos; } return *this; }
+        auto operator+= (size_t off) -> const_iterator { if (pos + off < v->size()) { pos += off; } else { pos = v->size(); } return *this; }
+        auto operator-= (size_t off) -> const_iterator { if (pos - off > 0        ) { pos -= off; } else { pos = 0;         } return *this; }
+        auto operator*  () const     -> T const&       { return  (*v)[pos      ]; }
+        auto operator-> () const     -> T const*       { return &(*v)[pos      ]; }
+        auto operator[] (size_t off) -> T const&       { return  (*v)[pos + off]; }
+        auto operator+  (size_t off) -> const_iterator { auto i = *this; i += off; return i; }
+        auto operator-  (size_t off) -> const_iterator { auto i = *this; i -= off; return i; }
+        auto operator-  (const_iterator const& that)   -> ptrdiff_t { return pos - that.pos; }
+        auto operator<=>(const_iterator const&) const  -> std::strong_ordering = default;
+    };
+
+    auto  begin()       -> iterator       { return {this, 0     }; }
+    auto  end  ()       -> iterator       { return {this, size()}; }
+    auto  begin() const -> const_iterator { return {this, 0     }; }
+    auto  end  () const -> const_iterator { return {this, size()}; }
+    auto cbegin() const -> const_iterator { return {this, 0     }; }
+    auto cend  () const -> const_iterator { return {this, size()}; }
+};
+
+template <typename T>
+auto operator+ (size_t off, typename stable_vector<T>::iterator const& it) -> typename stable_vector<T>::iterator { auto i = it; i += off; return i; }
+
+template <typename T>
+auto operator+ (size_t off, typename stable_vector<T>::const_iterator const& it) -> typename stable_vector<T>::const_iterator { auto i = it; i += off; return i; }
+
+//  And now jump over to std:: to drop in the size/ssize overloads
+}
+namespace std {
+    template <typename T>
+    auto  size(cpp2::stable_vector<T> const& v) -> ptrdiff_t { return v. size();  }
+    template <typename T>
+    auto ssize(cpp2::stable_vector<T> const& v) -> ptrdiff_t { return v.ssize();  }
+}
+namespace cpp2 {
 
 
 //-----------------------------------------------------------------------
@@ -894,6 +1219,14 @@ static cmdline_processor::register_flag cmd_internal_debug(
 //-----------------------------------------------------------------------
 //
 
+//-----------------------------------------------------------------------
+//
+//  stackinstr: builds debug information to find causes of large stacks
+//
+//  Useful if we need to optimize deep recursion to use less stack
+//
+//-----------------------------------------------------------------------
+//
 class stackinstr
 {
     struct entry
@@ -925,7 +1258,7 @@ class stackinstr
 
     static auto print(auto&& ee, std::string_view label) {
         std::cout << "\n=== Stack debug information: " << label << " stack ===\n";
-        for (auto& e: ee) 
+        for (auto& e: ee)
         if  (e.ptr) {
             std::cout
                 << "  " << std::setw(6)
@@ -938,21 +1271,21 @@ class stackinstr
 
 public:
     struct guard {
-        guard( std::string_view name, std::string_view file, int line, char* p ) {
-            if (flag_internal_debug) {
-                entries.emplace_back(name, file, line ,p);
-                if (ssize(deepest) < ssize(entries)) {
-                    deepest = entries;
-                }
-                if (largest.empty() || largest.back().cumulative < entries.back().cumulative) {
-                    largest = entries;
-                }
-            }
+        guard( std::string_view /*name*/, std::string_view /*file*/, int /*line*/, char* /*p*/ ) {
+            //if (flag_internal_debug) {
+            //    entries.emplace_back(name, file, line ,p);
+            //    if (ssize(deepest) < ssize(entries)) {
+            //        deepest = entries;
+            //    }
+            //    if (largest.empty() || largest.back().cumulative < entries.back().cumulative) {
+            //        largest = entries;
+            //    }
+            //}
         }
         ~guard() {
-            if (flag_internal_debug) {
-                entries.pop_back();
-            }
+            //if (flag_internal_debug) {
+            //    entries.pop_back();
+            //}
         }
     };
 
@@ -967,6 +1300,63 @@ std::vector<stackinstr::entry> stackinstr::largest;
 
 #define STACKINSTR stackinstr::guard _s_guard{ __func__, __FILE__, __LINE__, reinterpret_cast<char*>(&_s_guard) };
 
+
+//-----------------------------------------------------------------------
+//
+//  timer:  a little profiling timer to measure time spent in
+//          specific sections of code
+//
+//  Use CPP2_SCOPE_TIMER("unique name") to declare local objects whose
+//  total timings will be reported in -verbose in CPP2_DEBUG_BUILD builds.
+//
+//-----------------------------------------------------------------------
+//
+class timer
+{
+    using clock = std::chrono::high_resolution_clock;
+
+    bool                           running  = false;
+    std::chrono::time_point<clock> start_tm = clock::now();
+    std::chrono::duration<double>  duration = {};
+
+public:
+    auto start() {
+        testing.enforce( !running );
+        running  = true;
+        start_tm = clock::now();
+    }
+
+    auto stop() {
+        testing.enforce( running );
+        running   = false;
+        duration += clock::now() - start_tm;
+    }
+
+    void reset() {
+        duration = {};
+    }
+
+    auto elapsed() const {
+        testing.enforce( !running );
+        return std::chrono::duration_cast<std::chrono::milliseconds>(duration);
+    }
+};
+
+static std::unordered_map<std::string_view, timer> timers;  // global named timers
+
+auto scope_timer(std::string_view name) {
+    timers[name].start();
+    auto stop = [=]{ timers[name].stop(); };
+    return finally( std::move(stop) );
+}
+
+#ifdef CPP2_DEBUG_BUILD
+#define CPP2_CONCAT(x,y)       x##y
+#define CPP2_UNIQUE_NAME(x,y)  CPP2_CONCAT(x,y)
+#define CPP2_SCOPE_TIMER(name) auto CPP2_UNIQUE_NAME(timer,__LINE__) = scope_timer(name)
+#else
+#define CPP2_SCOPE_TIMER(name)
+#endif
 
 }
 

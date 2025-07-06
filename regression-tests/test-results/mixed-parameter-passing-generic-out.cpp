@@ -1,3 +1,4 @@
+#include <iostream>
 
 
 //=== Cpp2 type declarations ====================================================
@@ -11,7 +12,7 @@
 //=== Cpp2 type definitions and function declarations ===========================
 
 #line 1 "mixed-parameter-passing-generic-out.cpp2"
-#include <iostream>
+#line 2 "mixed-parameter-passing-generic-out.cpp2"
 
 struct X {
     X(int) { }
@@ -33,19 +34,19 @@ auto f(auto x_) -> void;
 
 #line 11 "mixed-parameter-passing-generic-out.cpp2"
 auto f(auto x_) -> void{
-    auto x = cpp2::out(x_); 
+    auto x = cpp2::impl::out(x_); 
 #line 12 "mixed-parameter-passing-generic-out.cpp2"
     x.construct(42);
 }
 
 #line 15 "mixed-parameter-passing-generic-out.cpp2"
 [[nodiscard]] auto main() -> int{
-    cpp2::deferred_init<int> a; 
-    f(cpp2::out(&a));
-    std::cout << std::move(a.value()) << "\n";
+    cpp2::impl::deferred_init<int> a; 
+    f(cpp2::impl::out(&a));
+    std::cout << cpp2::move(a.value()) << "\n";
 
-    cpp2::deferred_init<X> b; 
-    f(cpp2::out(&b));
-    std::cout << std::move(b.value()) << "\n";
+    cpp2::impl::deferred_init<X> b; 
+    f(cpp2::impl::out(&b));
+    std::cout << cpp2::move(b.value()) << "\n";
 }
 

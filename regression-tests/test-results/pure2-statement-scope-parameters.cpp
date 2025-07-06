@@ -30,7 +30,7 @@ auto const& i{local_int};
 
     //  'in' (read-only) statement scope variable
 #line 6 "pure2-statement-scope-parameters.cpp2"
-    for ( auto const& arg : args ) {
+    for ( [[maybe_unused]] auto const& unnamed_param_1 : args ) {
         std::cout << i << "\n";     // prints 42
     }
 }
@@ -44,7 +44,7 @@ auto& i{local_int};
     }
 }
 #line 14 "pure2-statement-scope-parameters.cpp2"
-    std::cout << std::move(local_int) << "\n";// prints 43
+    std::cout << cpp2::move(local_int) << "\n";// prints 43
 
     std::chrono::duration<cpp2::i32> auto_1 {0}; 
 {
