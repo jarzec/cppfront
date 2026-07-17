@@ -6,9 +6,9 @@ main: () -> int = {
     print_subrange(v, 1, 13);
 }
 
-print_subrange: (rng:_, start:int, end:int) = {
-    assert<Bounds>( 0 <= start );
-    assert<Bounds>( end <= rng.ssize() );
+print_subrange: (rng, start:int, end:int) = {
+    assert<bounds_safety>( 0 <= start );
+    assert<bounds_safety>( end <= rng.ssize() );
 
     count := 0;
     for  rng

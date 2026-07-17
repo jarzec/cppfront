@@ -1,5 +1,5 @@
 
-#define CPP2_IMPORT_STD          Yes
+#define CPP2_INCLUDE_STD         Yes
 
 //=== Cpp2 type declarations ====================================================
 
@@ -22,7 +22,7 @@ auto main() -> int;
 
 #line 2 "pure2-concept-definition.cpp2"
 auto main() -> int      {
-  if (cpp2::Testing.has_handler() && !(arithmetic<cpp2::i32>) ) { cpp2::Testing.report_violation(""); }
-  if (cpp2::Testing.has_handler() && !(arithmetic<float>) ) { cpp2::Testing.report_violation(""); }
+  if (cpp2::testing.is_active() && !(arithmetic<cpp2::i32>) ) { cpp2::testing.report_violation(""); }
+  if (cpp2::testing.is_active() && !(arithmetic<float>) ) { cpp2::testing.report_violation(""); }
 }
 

@@ -1,5 +1,5 @@
 
-#define CPP2_IMPORT_STD          Yes
+#define CPP2_INCLUDE_STD         Yes
 
 //=== Cpp2 type declarations ====================================================
 
@@ -19,5 +19,5 @@ auto main() -> int;
 #line 1 "pure2-bugfix-for-template-argument.cpp2"
 auto main() -> int { 
 #line 2 "pure2-bugfix-for-template-argument.cpp2"
-    std::cout << (cpp2::to_string(std::is_void_v<cpp2::i32*> && std::is_void_v<cpp2::i32 const>) + "\n");  }
+    std::cout << "" + cpp2::to_string(std::is_void_v<cpp2::i32*> && std::is_void_v<cpp2::i32 const>) + "\n";  }
 
