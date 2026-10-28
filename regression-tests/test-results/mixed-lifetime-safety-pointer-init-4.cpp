@@ -1,3 +1,6 @@
+#line 2 "mixed-lifetime-safety-pointer-init-4.cpp2"
+#include <iostream>
+#include <random>
 
 
 //=== Cpp2 type declarations ====================================================
@@ -12,15 +15,12 @@
 
 #line 1 "mixed-lifetime-safety-pointer-init-4.cpp2"
 
-#include <iostream>
-#include <random>
-
 #line 5 "mixed-lifetime-safety-pointer-init-4.cpp2"
 [[nodiscard]] auto main() -> int;
 
 #line 21 "mixed-lifetime-safety-pointer-init-4.cpp2"
-auto print_and_decorate(auto const& thing) -> void;
-#line 23 "mixed-lifetime-safety-pointer-init-4.cpp2"
+auto print_and_decorate(auto const& x) -> void;
+#line 24 "mixed-lifetime-safety-pointer-init-4.cpp2"
 
 bool flip_a_coin() {
     // Change std::mt19937 to std::random_device for non-deterministic PRNG
@@ -37,7 +37,7 @@ bool flip_a_coin() {
 [[nodiscard]] auto main() -> int{
     int x {42}; 
     int y {43}; 
-    cpp2::deferred_init<int*> p; 
+    cpp2::impl::deferred_init<int*> p; 
 
     // ... more code ...
     if (flip_a_coin()) {
@@ -47,10 +47,11 @@ bool flip_a_coin() {
         p.construct(&x);
     }
 
-    print_and_decorate(*cpp2::assert_not_null(std::move(p.value())));
+    print_and_decorate(*cpp2::impl::assert_not_null(cpp2::move(p.value())));
 }
 
 #line 21 "mixed-lifetime-safety-pointer-init-4.cpp2"
-auto print_and_decorate(auto const& thing) -> void { 
-    std::cout << ">> " << thing << "\n";  }
+auto print_and_decorate(auto const& x) -> void{
+    std::cout << ">> " << x << "\n";
+}
 

@@ -1,3 +1,8 @@
+#include <vector>
+#include <string>
+#include <span>
+#include <algorithm>
+#include <iostream>
 
 
 //=== Cpp2 type declarations ====================================================
@@ -11,11 +16,6 @@
 //=== Cpp2 type definitions and function declarations ===========================
 
 #line 1 "mixed-function-expression-and-std-for-each.cpp2"
-#include <vector>
-#include <string>
-#include <span>
-#include <algorithm>
-#include <iostream>
 
 #line 7 "mixed-function-expression-and-std-for-each.cpp2"
 [[nodiscard]] auto main() -> int;
@@ -32,17 +32,17 @@
     //  Passing a function expression
     std::ranges::for_each(
         vec, 
-        [](auto& x) mutable -> void { x += "-ish";  }
+        [](auto& x) -> decltype(auto) { return x += "-ish";  }
     );
 
     //  Initializing from a function expression
-    auto callback {[](auto& x) mutable -> void { x += " maybe";  }}; 
+    auto callback {[](auto& x) -> decltype(auto) { return x += " maybe";  }}; 
     std::ranges::for_each(
         vec, 
-        std::move(callback)
+        cpp2::move(callback)
     );
 
-    for ( auto const& str : vec ) {
+    for ( auto const& str : cpp2::move(vec) ) {
         std::cout << str << "\n";
     }
 }

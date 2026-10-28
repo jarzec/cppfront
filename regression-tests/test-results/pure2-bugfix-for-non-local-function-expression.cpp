@@ -1,5 +1,5 @@
 
-#define CPP2_IMPORT_STD          Yes
+#define CPP2_INCLUDE_STD         Yes
 
 //=== Cpp2 type declarations ====================================================
 
@@ -20,11 +20,11 @@ class t;
 //  Standalone Cpp1 repro: https://godbolt.org/z/dznnYTvc6
 
 #line 5 "pure2-bugfix-for-non-local-function-expression.cpp2"
-template<typename T> concept v = []() mutable -> bool { return true;  }(); 
+template<typename T> concept v = []() -> bool { return true;  }(); 
 
-using u = std::type_identity_t<decltype([]() mutable -> void{})>;
+using u = decltype([]() -> void{});
 
-class t: public std::type_identity_t<decltype([]() mutable -> void{})> {
+class t: public decltype([]() -> void{}) {
 
 };
 

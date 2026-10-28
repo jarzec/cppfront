@@ -1,5 +1,5 @@
 
-#define CPP2_IMPORT_STD          Yes
+#define CPP2_INCLUDE_STD         Yes
 
 //=== Cpp2 type declarations ====================================================
 
@@ -28,7 +28,7 @@ auto main() -> int;
 
 #line 5 "pure2-bugfix-for-non-local-initialization.cpp2"
 auto main() -> int{
-  if (cpp2::Testing.has_handler() && !(CPP2_ASSERT_IN_BOUNDS_LITERAL(t::value, 0) == 17) ) { cpp2::Testing.report_violation(""); }
-  if (cpp2::Testing.has_handler() && !(CPP2_ASSERT_IN_BOUNDS_LITERAL(t::value, 1) == 29) ) { cpp2::Testing.report_violation(""); }
+  if (cpp2::testing.is_active() && !(CPP2_ASSERT_IN_BOUNDS_LITERAL(t::value, 0) == 17) ) { cpp2::testing.report_violation(""); }
+  if (cpp2::testing.is_active() && !(CPP2_ASSERT_IN_BOUNDS_LITERAL(t::value, 1) == 29) ) { cpp2::testing.report_violation(""); }
 }
 

@@ -1,5 +1,5 @@
 
-#define CPP2_IMPORT_STD          Yes
+#define CPP2_INCLUDE_STD         Yes
 
 //=== Cpp2 type declarations ====================================================
 
@@ -26,6 +26,6 @@
 [[nodiscard]] auto main() -> int{
     std::string s {"Fred"}; 
     auto myfile {cpp2::fopen("xyzzy", "w")}; 
-    static_cast<void>(CPP2_UFCS(fprintf)(std::move(myfile), "Hello %s with UFCS!", CPP2_UFCS(c_str)(std::move(s))));
+    static_cast<void>(CPP2_UFCS(fprintf)(cpp2::move(myfile), "Hello %s with UFCS!", CPP2_UFCS(c_str)(cpp2::move(s))));
 }
 

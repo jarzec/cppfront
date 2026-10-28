@@ -1,3 +1,5 @@
+#line 2 "mixed-bounds-check.cpp2"
+#include <vector>
 
 
 //=== Cpp2 type declarations ====================================================
@@ -12,8 +14,6 @@
 
 #line 1 "mixed-bounds-check.cpp2"
 
-#include <vector>
-
 #line 4 "mixed-bounds-check.cpp2"
 [[nodiscard]] auto main() -> int;
 
@@ -27,6 +27,6 @@
 
     std::vector v {1, 2, 3, 4, 5, -999}; 
     CPP2_UFCS(pop_back)(v);
-    std::cout << CPP2_ASSERT_IN_BOUNDS_LITERAL(std::move(v), 5) << "\n";
+    std::cout << CPP2_ASSERT_IN_BOUNDS_LITERAL(cpp2::move(v), 5) << "\n";
 }
 
